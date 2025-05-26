@@ -1,3 +1,16 @@
+
+# Medical Documents
+*.pdf
+**/*.pdf
+Redacted/**/*.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+*.class
+*.so
+.Python
+env/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -19,6 +32,44 @@ lib64/
 parts/
 sdist/
 var/
+<<<<<<< HEAD
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Elasticsearch
+data/
+elasticsearch-data/
+
+# Docker
+.docker/
+docker-compose.override.yml
+
+# Model files
+*.bin
+*.pt
+*.pth
+*.onnx
+=======
 wheels/
 share/python-wheels/
 *.egg-info/
@@ -172,3 +223,4 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+>>>>>>> 2c5bdd60cb3f0f79160ff9103cdd4385f385d9d0
