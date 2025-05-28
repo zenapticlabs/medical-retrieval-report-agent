@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install PyTorch and CUDA first
-RUN pip install --no-cache-dir torch==2.0.1
+RUN pip install --no-cache-dir torch>=2.1.0
 
 # Copy requirements and install other dependencies
 COPY requirements.txt .
