@@ -27,12 +27,16 @@ nltk.download('punkt')
 nltk.download('stopwords')
 
 class DocumentProcessor:
-    def __init__(self, vector_db_type: str = 'elasticsearch', **vector_db_kwargs):
+    def __init__(self):
         logger.info("Initializing DocumentProcessor...")
         
+        # Initialize vector database service based on USE_OPENSEARCH flag
+        use_opensearch = os.getenv('USE_OPENSEARCH', 'false').lower() == 'true'
+        logger.info(f"Using {'OpenSearch' if use_opensearch else 'Elasticsearch'} as vector database")
+        
         # Initialize vector database service
-        self.vector_db = VectorDBFactory.create_service(vector_db_type, **vector_db_kwargs)
-        self.index_name = "medical_documents"
+        self.vector_db = VectorDBFactory.create_service()
+        self.index_name = os.getenv('OPENSEARCH_INDEX_NAME', 'medical_documents')
         
         self.stop_words = set(stopwords.words('english'))
         
@@ -95,22 +99,39 @@ class DocumentProcessor:
                 if current_chunk:
                     chunks.append(' '.join(current_chunk))
                 
-                embeddings = []
+                # Process each chunk and collect embeddings
+                chunk_embeddings = []
                 for chunk in chunks:
+                    if not chunk.strip():  # Skip empty chunks
+                        continue
                     tokens = self.tokenizer(chunk, return_tensors="pt", truncation=True, max_length=max_length)
                     with torch.no_grad():
                         outputs = self.model(**tokens)
                     chunk_embedding = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
-                    embeddings.append(chunk_embedding)
+                    chunk_embeddings.append(chunk_embedding)
+                
+                if not chunk_embeddings:  # If no valid embeddings were generated
+                    logger.error("No valid embeddings generated from chunks")
+                    raise ValueError("Failed to generate embeddings from text chunks")
                 
                 # Average the embeddings
-                return np.mean(embeddings, axis=0)
+                return np.mean(chunk_embeddings, axis=0)
             else:
                 # Process normally if within limits
+                if not text.strip():  # Check for empty text
+                    logger.error("Empty text provided for embedding")
+                    raise ValueError("Cannot generate embedding for empty text")
+                    
                 tokens = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=max_length)
                 with torch.no_grad():
                     outputs = self.model(**tokens)
-                return outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
+                embedding = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
+                
+                if embedding is None or len(embedding) == 0:
+                    logger.error("Generated embedding is null or empty")
+                    raise ValueError("Failed to generate embedding")
+                    
+                return embedding
         except Exception as e:
             logger.error(f"Error generating embedding: {str(e)}")
             raise
