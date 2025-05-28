@@ -4,7 +4,6 @@ import torch
 import numpy as np
 from docx import Document
 from transformers import AutoTokenizer, AutoModel
-from elasticsearch import Elasticsearch
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize, sent_tokenize
 import nltk
@@ -14,6 +13,7 @@ import warnings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import Docx2txtLoader
 from datetime import datetime
+from services.vector_db import VectorDBFactory
 
 # Suppress specific warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -30,31 +30,15 @@ class DocumentProcessor:
     def __init__(self):
         logger.info("Initializing DocumentProcessor...")
         
-        # Get configuration from environment variables
-        self.es_host = os.getenv('ELASTICSEARCH_HOST', 'elasticsearch')
-        self.es_port = int(os.getenv('ELASTICSEARCH_PORT', 9200))
-        self.max_retries = int(os.getenv('MAX_RETRIES', 10))
-        self.retry_interval = int(os.getenv('RETRY_INTERVAL', 10))
+        # Initialize vector database service based on USE_OPENSEARCH flag
+        use_opensearch = os.getenv('USE_OPENSEARCH', 'false').lower() == 'true'
+        logger.info(f"Using {'OpenSearch' if use_opensearch else 'Elasticsearch'} as vector database")
         
-        # Initialize Elasticsearch connection with retries
-        self.es = None
-        for attempt in range(self.max_retries):
-            try:
-                logger.info(f"Connecting to Elasticsearch at {self.es_host}:{self.es_port} (attempt {attempt + 1}/{self.max_retries})...")
-                self.es = Elasticsearch([{'host': self.es_host, 'port': self.es_port}])
-                if self.es.ping():
-                    logger.info("Successfully connected to Elasticsearch")
-                    break
-            except Exception as e:
-                logger.warning(f"Failed to connect to Elasticsearch: {str(e)}")
-                if attempt < self.max_retries - 1:
-                    logger.info(f"Waiting {self.retry_interval} seconds before retrying...")
-                    time.sleep(self.retry_interval)
-                else:
-                    raise Exception(f"Failed to connect to Elasticsearch after {self.max_retries} attempts")
+        # Initialize vector database service
+        self.vector_db = VectorDBFactory.create_service()
+        self.index_name = os.getenv('OPENSEARCH_INDEX_NAME', 'medical_documents')
         
         self.stop_words = set(stopwords.words('english'))
-        self.index_name = "medical_documents"
         
         # Initialize LangChain components with larger chunk size
         logger.info("Initializing LangChain components...")
@@ -115,22 +99,39 @@ class DocumentProcessor:
                 if current_chunk:
                     chunks.append(' '.join(current_chunk))
                 
-                embeddings = []
+                # Process each chunk and collect embeddings
+                chunk_embeddings = []
                 for chunk in chunks:
+                    if not chunk.strip():  # Skip empty chunks
+                        continue
                     tokens = self.tokenizer(chunk, return_tensors="pt", truncation=True, max_length=max_length)
                     with torch.no_grad():
                         outputs = self.model(**tokens)
                     chunk_embedding = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
-                    embeddings.append(chunk_embedding)
+                    chunk_embeddings.append(chunk_embedding)
+                
+                if not chunk_embeddings:  # If no valid embeddings were generated
+                    logger.error("No valid embeddings generated from chunks")
+                    raise ValueError("Failed to generate embeddings from text chunks")
                 
                 # Average the embeddings
-                return np.mean(embeddings, axis=0)
+                return np.mean(chunk_embeddings, axis=0)
             else:
                 # Process normally if within limits
+                if not text.strip():  # Check for empty text
+                    logger.error("Empty text provided for embedding")
+                    raise ValueError("Cannot generate embedding for empty text")
+                    
                 tokens = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=max_length)
                 with torch.no_grad():
                     outputs = self.model(**tokens)
-                return outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
+                embedding = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
+                
+                if embedding is None or len(embedding) == 0:
+                    logger.error("Generated embedding is null or empty")
+                    raise ValueError("Failed to generate embedding")
+                    
+                return embedding
         except Exception as e:
             logger.error(f"Error generating embedding: {str(e)}")
             raise
@@ -346,47 +347,9 @@ class DocumentProcessor:
         return processed_chunks
 
     def create_index(self):
-        """Create or recreate the Elasticsearch index"""
-        # Delete index if it exists
-        if self.es.indices.exists(index=self.index_name):
-            logger.info(f"Deleting existing index: {self.index_name}")
-            self.es.indices.delete(index=self.index_name)
-        
-        # Create new index with page number field
-        logger.info(f"Creating new index: {self.index_name}")
-        self.es.indices.create(
-            index=self.index_name,
-            body={
-                "mappings": {
-                    "properties": {
-                        "content": {"type": "text", "analyzer": "standard"},
-                        "embedding": {"type": "dense_vector", "dims": 768},
-                        "document_name": {"type": "keyword"},
-                        "chunk_index": {"type": "integer"},
-                        "page_number": {"type": "integer"},
-                        "section": {"type": "keyword"},
-                        "keywords": {"type": "keyword"},
-                        "context": {"type": "text"},
-                        "metadata": {"type": "object"},
-                        "extracted_date": {"type": "keyword"}
-                    }
-                }
-            }
-        )
-        logger.info("Index created successfully")
-
-    def extract_page_number(self, docx_path):
-        """Estimate page number based on page breaks in the docx file."""
-        try:
-            doc = Document(docx_path)
-            page_count = 0
-            for paragraph in doc.paragraphs:
-                if paragraph.style.name == 'Page Break':
-                    page_count += 1
-            return page_count
-        except Exception as e:
-            logger.error(f"Error extracting page number from {docx_path}: {str(e)}")
-            return None
+        """Create or recreate the vector database index"""
+        self.vector_db.delete_index(self.index_name)
+        return self.vector_db.create_index(self.index_name, dimensions=768)
 
     def extract_date(self, text):
         """Extract date from text using regex."""
@@ -431,28 +394,154 @@ class DocumentProcessor:
                 # Extract date from chunk
                 extracted_date = self.extract_date(chunk['text'])
                 
-                # Store in Elasticsearch with page number
-                self.es.index(
-                    index=self.index_name,
-                    body={
-                        "content": chunk['text'],
-                        "context": chunk['context'],
-                        "embedding": embedding.tolist(),
-                        "document_name": document_name,
-                        "chunk_index": i,
-                        "page_number": chunk['page_number'],
-                        "section": chunk['section'],
-                        "keywords": chunk['keywords'],
-                        "metadata": metadata,
-                        "extracted_date": extracted_date
-                    }
-                )
+                # Store in vector database
+                document = {
+                    "content": chunk['text'],
+                    "context": chunk['context'],
+                    "embedding": embedding.tolist(),
+                    "document_name": document_name,
+                    "chunk_index": i,
+                    "page_number": chunk['page_number'],
+                    "section": chunk['section'],
+                    "keywords": chunk['keywords'],
+                    "metadata": metadata,
+                    "extracted_date": extracted_date
+                }
+                
+                self.vector_db.index_document(self.index_name, document)
                 logger.info(f"Chunk {i+1} processed and stored successfully on page {chunk['page_number']}")
             
             logger.info(f"Successfully processed document: {docx_path}")
         except Exception as e:
             logger.error(f"Error processing document {docx_path}: {str(e)}")
             raise
+
+    def search(self, query, top_k=5):
+        try:
+            # Remove stop words from query
+            query_words = word_tokenize(query.lower())
+            query_words = [word for word in query_words if word not in self.stop_words]
+            query = " ".join(query_words)
+            
+            # Get query embedding
+            query_embedding = self.get_embedding(query)
+            
+            # Search in vector database
+            results = self.vector_db.search(self.index_name, query_embedding.tolist(), top_k)
+            
+            # Process and format results
+            document_results = {}
+            
+            for result in results:
+                source = result['source']
+                doc_name = source['document_name']
+                content = source['content']
+                page_number = source.get('page_number', 1)
+                extracted_date = source.get('extracted_date', '')
+                
+                if doc_name not in document_results:
+                    document_results[doc_name] = {
+                        'document_name': doc_name,
+                        'keyword_matches': {}
+                    }
+                
+                # For each keyword in the query, find matches in the content
+                for keyword in query_words:
+                    if keyword.lower() in content.lower():
+                        # Extract date near the keyword
+                        date_near_keyword = self.extract_date_near_keyword(content, keyword)
+                        # Use extracted date from chunk if no date found near keyword
+                        final_date = date_near_keyword or extracted_date or 'Not specified'
+                        
+                        # Create keyword summary
+                        keyword_summary = self.create_keyword_summary(content, keyword)
+                        
+                        if keyword not in document_results[doc_name]['keyword_matches']:
+                            document_results[doc_name]['keyword_matches'][keyword] = []
+                        
+                        # Add the match with its context, page number, and summary
+                        document_results[doc_name]['keyword_matches'][keyword].append({
+                            'date': final_date,
+                            'content': content,
+                            'page_number': page_number,
+                            'summary': keyword_summary,
+                            'section': source.get('section', 'main')
+                        })
+            
+            # Remove documents with no matches
+            document_results = {
+                doc_name: doc_data 
+                for doc_name, doc_data in document_results.items() 
+                if any(len(matches) > 0 for matches in doc_data['keyword_matches'].values())
+            }
+            
+            # Sort matches by score within each keyword group
+            for doc_name in document_results:
+                for keyword in document_results[doc_name]['keyword_matches']:
+                    # Limit to top matches per keyword
+                    document_results[doc_name]['keyword_matches'][keyword] = \
+                        document_results[doc_name]['keyword_matches'][keyword][:3]
+            
+            return document_results
+        except Exception as e:
+            logger.error(f"Error performing search: {str(e)}")
+            return {}
+
+    def list_documents(self):
+        """List all documents in the index"""
+        return self.vector_db.list_documents(self.index_name)
+
+    def get_document_content(self, document_name):
+        """Get all chunks of a specific document organized by page"""
+        try:
+            # Search for all chunks of the document
+            results = self.vector_db.search(
+                self.index_name,
+                query_vector=[0] * 768,  # Dummy vector for getting all documents
+                top_k=1000
+            )
+            
+            # Filter results for the specific document
+            document_chunks = [
+                result['source'] for result in results
+                if result['source']['document_name'] == document_name
+            ]
+            
+            if not document_chunks:
+                return None
+            
+            # Organize chunks by page
+            pages = {}
+            metadata = None
+            
+            for chunk in document_chunks:
+                page_num = chunk.get('page_number', 1)
+                
+                if page_num not in pages:
+                    pages[page_num] = []
+                
+                pages[page_num].append({
+                    'chunk_index': chunk.get('chunk_index', 0),
+                    'content': chunk.get('content', ''),
+                    'section': chunk.get('section', 'main'),
+                    'keywords': chunk.get('keywords', []),
+                    'extracted_date': chunk.get('extracted_date', '')
+                })
+                
+                # Get metadata from the first chunk
+                if metadata is None:
+                    metadata = chunk.get('metadata', {})
+            
+            return {
+                'document_name': document_name,
+                'total_pages': len(pages),
+                'total_chunks': sum(len(chunks) for chunks in pages.values()),
+                'pages': pages,
+                'metadata': metadata
+            }
+        except Exception as e:
+            logger.error(f"Error getting document content: {str(e)}")
+            return None
 
     def process_all_documents(self, documents_dir):
         """Process all documents in the directory, dropping old data first"""
@@ -529,204 +618,4 @@ class DocumentProcessor:
             return None
         except Exception as e:
             logger.error(f"Error extracting date near keyword: {str(e)}")
-            return None
-
-    def search(self, query, top_k=5):
-        try:
-            # Remove stop words from query
-            query_words = word_tokenize(query.lower())
-            query_words = [word for word in query_words if word not in self.stop_words]
-            query = " ".join(query_words)
-            
-            # Get query embedding
-            query_embedding = self.get_embedding(query)
-            
-            # Search in Elasticsearch with both semantic and keyword matching
-            response = self.es.search(
-                index=self.index_name,
-                body={
-                    "query": {
-                        "bool": {
-                            "should": [
-                                {
-                                    "script_score": {
-                                        "query": {"match_all": {}},
-                                        "script": {
-                                            "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
-                                            "params": {"query_vector": query_embedding.tolist()}
-                                        }
-                                    }
-                                },
-                                {
-                                    "match": {
-                                        "content": {
-                                            "query": query,
-                                            "boost": 0.5
-                                        }
-                                    }
-                                },
-                                {
-                                    "terms": {
-                                        "keywords": query_words,
-                                        "boost": 0.3
-                                    }
-                                }
-                            ],
-                            "minimum_should_match": 1
-                        }
-                    },
-                    "size": top_k * 3  # Get more results to group by document
-                }
-            )
-            
-            # Group results by document and page
-            document_results = {}
-            
-            if response['hits']['total']['value'] > 0:
-                for hit in response['hits']['hits']:
-                    source = hit['_source']
-                    doc_name = source['document_name']
-                    content = source['content']
-                    page_number = source.get('page_number', 1)
-                    extracted_date = source.get('extracted_date', '')
-                    
-                    if doc_name not in document_results:
-                        document_results[doc_name] = {
-                            'document_name': doc_name,
-                            'keyword_matches': {}
-                        }
-                    
-                    # For each keyword in the query, find matches in the content
-                    for keyword in query_words:
-                        if keyword.lower() in content.lower():
-                            # Extract date near the keyword
-                            date_near_keyword = self.extract_date_near_keyword(content, keyword)
-                            # Use extracted date from chunk if no date found near keyword
-                            final_date = date_near_keyword or extracted_date or 'Not specified'
-                            
-                            # Create keyword summary
-                            keyword_summary = self.create_keyword_summary(content, keyword)
-                            
-                            if keyword not in document_results[doc_name]['keyword_matches']:
-                                document_results[doc_name]['keyword_matches'][keyword] = []
-                            
-                            # Add the match with its context, page number, and summary
-                            document_results[doc_name]['keyword_matches'][keyword].append({
-                                'date': final_date,
-                                'content': content,
-                                'page_number': page_number,
-                                'summary': keyword_summary,
-                                'section': source.get('section', 'main')
-                            })
-            
-            # Remove documents with no matches
-            document_results = {
-                doc_name: doc_data 
-                for doc_name, doc_data in document_results.items() 
-                if any(len(matches) > 0 for matches in doc_data['keyword_matches'].values())
-            }
-            
-            # Sort matches by score within each keyword group
-            for doc_name in document_results:
-                for keyword in document_results[doc_name]['keyword_matches']:
-                    # Limit to top matches per keyword
-                    document_results[doc_name]['keyword_matches'][keyword] = \
-                        document_results[doc_name]['keyword_matches'][keyword][:3]
-            
-            return document_results
-        except Exception as e:
-            logger.error(f"Error performing search: {str(e)}")
-            return {}
-
-    def list_documents(self):
-        """List all documents in the index with page information"""
-        try:
-            response = self.es.search(
-                index=self.index_name,
-                body={
-                    "size": 0,
-                    "aggs": {
-                        "unique_documents": {
-                            "terms": {
-                                "field": "document_name",
-                                "size": 1000
-                            },
-                            "aggs": {
-                                "max_page": {
-                                    "max": {
-                                        "field": "page_number"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            )
-            
-            documents = []
-            for bucket in response['aggregations']['unique_documents']['buckets']:
-                documents.append({
-                    'name': bucket['key'],
-                    'chunks': bucket['doc_count'],
-                    'max_page': int(bucket['max_page']['value']) if bucket['max_page']['value'] else 1
-                })
-            
-            return documents
-        except Exception as e:
-            logger.error(f"Error listing documents: {str(e)}")
-            return []
-
-    def get_document_content(self, document_name):
-        """Get all chunks of a specific document organized by page"""
-        try:
-            response = self.es.search(
-                index=self.index_name,
-                body={
-                    "query": {
-                        "term": {
-                            "document_name": document_name
-                        }
-                    },
-                    "sort": [
-                        {"page_number": {"order": "asc"}},
-                        {"chunk_index": {"order": "asc"}}
-                    ],
-                    "size": 1000
-                }
-            )
-            
-            if not response['hits']['hits']:
-                return None
-            
-            pages = {}
-            metadata = None
-            
-            for hit in response['hits']['hits']:
-                source = hit['_source']
-                page_num = source.get('page_number', 1)
-                
-                if page_num not in pages:
-                    pages[page_num] = []
-                
-                pages[page_num].append({
-                    'chunk_index': source.get('chunk_index', 0),
-                    'content': source.get('content', ''),
-                    'section': source.get('section', 'main'),
-                    'keywords': source.get('keywords', []),
-                    'extracted_date': source.get('extracted_date', '')
-                })
-                
-                # Get metadata from the first chunk
-                if metadata is None:
-                    metadata = source.get('metadata', {})
-            
-            return {
-                'document_name': document_name,
-                'total_pages': len(pages),
-                'total_chunks': sum(len(chunks) for chunks in pages.values()),
-                'pages': pages,
-                'metadata': metadata
-            }
-        except Exception as e:
-            logger.error(f"Error getting document content: {str(e)}")
             return None 

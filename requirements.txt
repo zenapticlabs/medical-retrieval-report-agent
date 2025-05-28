@@ -1,8 +1,12 @@
-transformers==4.30.2
+transformers>=4.32.0
 elasticsearch==7.17.9
 python-docx==0.8.11
 nltk==3.8.1
 flask==2.3.3
 numpy==1.24.3
 langchain==0.0.352
-docx2txt==0.8 
+docx2txt==0.8
+boto3==1.34.34
+opensearch-py==2.3.2
+requests-aws4auth==1.2.3
+sentence-transformers==2.5.1 
