@@ -416,9 +416,12 @@ class DocumentProcessor:
             logger.error(f"Error processing document {docx_path}: {str(e)}")
             raise
 
-    def search(self, query, top_k=5):
+    def search(self, query, top_k=20):  # Default value of 20 for backward compatibility
         try:
             # Remove stop words from query
+            # Remove special characters and clean the query
+            query = re.sub(r'[^\w\s]', ' ', query)  # Remove special characters except spaces
+            query = re.sub(r'\s+', ' ', query).strip()  # Normalize whitespace
             query_words = word_tokenize(query.lower())
             query_words = [word for word in query_words if word not in self.stop_words]
             query = " ".join(query_words)
@@ -426,7 +429,7 @@ class DocumentProcessor:
             # Get query embedding
             query_embedding = self.get_embedding(query)
             
-            # Search in vector database
+            # Search in vector database with specified top_k
             results = self.vector_db.search(self.index_name, query_embedding.tolist(), top_k)
             
             # Process and format results
@@ -436,51 +439,41 @@ class DocumentProcessor:
                 source = result['source']
                 doc_name = source['document_name']
                 content = source['content']
-                page_number = source.get('page_number', 1)
-                extracted_date = source.get('extracted_date', '')
+                score = result['score']  # Get the similarity score
                 
                 if doc_name not in document_results:
                     document_results[doc_name] = {
                         'document_name': doc_name,
-                        'keyword_matches': {}
+                        'chunks': []
                     }
                 
-                # For each keyword in the query, find matches in the content
+                # Find matching keywords in content
+                found_keywords = []
+                highlighted_content = content
                 for keyword in query_words:
                     if keyword.lower() in content.lower():
-                        # Extract date near the keyword
-                        date_near_keyword = self.extract_date_near_keyword(content, keyword)
-                        # Use extracted date from chunk if no date found near keyword
-                        final_date = date_near_keyword or extracted_date or 'Not specified'
-                        
-                        # Create keyword summary
-                        keyword_summary = self.create_keyword_summary(content, keyword)
-                        
-                        if keyword not in document_results[doc_name]['keyword_matches']:
-                            document_results[doc_name]['keyword_matches'][keyword] = []
-                        
-                        # Add the match with its context, page number, and summary
-                        document_results[doc_name]['keyword_matches'][keyword].append({
-                            'date': final_date,
-                            'content': content,
-                            'page_number': page_number,
-                            'summary': keyword_summary,
-                            'section': source.get('section', 'main')
-                        })
+                        found_keywords.append(keyword)
+                        # Create regex pattern for whole word match
+                        pattern = r'\b' + re.escape(keyword) + r'\b'
+                        highlighted_content = re.sub(
+                            pattern,
+                            lambda m: f'<span class="highlight">{m.group(0)}</span>',
+                            highlighted_content,
+                            flags=re.IGNORECASE
+                        )
+                
+                # Add chunk with its score, highlighted content, and found keywords
+                document_results[doc_name]['chunks'].append({
+                    'content': highlighted_content,
+                    'score': score,
+                    'page_number': source.get('page_number', 1),
+                    'found_keywords': found_keywords,
+                    'semantic_score': score  # This will be used when no keywords are found
+                })
             
-            # Remove documents with no matches
-            document_results = {
-                doc_name: doc_data 
-                for doc_name, doc_data in document_results.items() 
-                if any(len(matches) > 0 for matches in doc_data['keyword_matches'].values())
-            }
-            
-            # Sort matches by score within each keyword group
+            # Sort chunks by score within each document
             for doc_name in document_results:
-                for keyword in document_results[doc_name]['keyword_matches']:
-                    # Limit to top matches per keyword
-                    document_results[doc_name]['keyword_matches'][keyword] = \
-                        document_results[doc_name]['keyword_matches'][keyword][:3]
+                document_results[doc_name]['chunks'].sort(key=lambda x: x['score'], reverse=True)
             
             return document_results
         except Exception as e:

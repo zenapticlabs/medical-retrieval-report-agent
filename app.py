@@ -17,12 +17,15 @@ def index():
 @app.route('/search', methods=['POST'])
 def search():
     try:
-        query = request.json.get('query', '')
+        data = request.get_json()
+        query = data.get('query', '')
+        top_k = int(data.get('top_k', 20))  # Default to 20 if not specified
+        
         if not query:
-            return jsonify({'error': 'No query provided'}), 400
+            return jsonify({'error': 'No query provided'})
         
         logger.info(f"Processing search query: {query}")
-        results = processor.search(query)
+        results = processor.search(query, top_k=top_k)
         return jsonify({'results': results})
     except Exception as e:
         logger.error(f"Error processing search: {str(e)}")
