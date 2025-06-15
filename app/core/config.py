@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     AWS_ACCESS_KEY_ID: Optional[str] = os.getenv("AWS_ACCESS_KEY_ID")
     AWS_SECRET_ACCESS_KEY: Optional[str] = os.getenv("AWS_SECRET_ACCESS_KEY")
     
+    # SharePoint settings
+    SHAREPOINT_TENANT_ID: str = os.getenv("SHAREPOINT_TENANT_ID")
+    SHAREPOINT_CLIENT_ID: str = os.getenv("SHAREPOINT_CLIENT_ID")
+    SHAREPOINT_CLIENT_SECRET: str = os.getenv("SHAREPOINT_CLIENT_SECRET")
+    SHAREPOINT_SITE_ID: str = os.getenv("SHAREPOINT_SITE_ID")
+    
     # Vector dimensions
     VECTOR_DIMENSION: int = int(os.getenv("VECTOR_DIMENSION", "768"))
     

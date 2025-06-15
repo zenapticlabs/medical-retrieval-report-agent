@@ -1,9 +1,8 @@
 from sqlalchemy import Column, Integer, String, Boolean, DateTime
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import relationship
 from datetime import datetime
 from sqlalchemy.sql import func
-
-Base = declarative_base()
+from app.models.base import Base
 
 class User(Base):
     __tablename__ = "users"
@@ -16,4 +15,7 @@ class User(Base):
     is_admin = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    last_login = Column(DateTime(timezone=True), nullable=True) 
+    last_login = Column(DateTime(timezone=True), nullable=True)
+
+    # Relationships
+    folder_ingestions = relationship("FolderIngestion", back_populates="user", lazy="dynamic") 

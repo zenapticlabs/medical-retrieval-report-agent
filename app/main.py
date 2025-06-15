@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 import os
 from datetime import datetime
 
-from app.api.routes import search, documents, admin
+from app.api.routes import search, documents, admin, folder_ingestion
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.core.auth import create_access_token, get_current_user, verify_password
@@ -37,6 +37,7 @@ templates = Jinja2Templates(directory="app/templates")
 app.include_router(search.router, prefix="/api", tags=["search"])
 app.include_router(documents.router, prefix="/api", tags=["documents"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
+app.include_router(folder_ingestion.router, prefix="/api", tags=["folder_ingestion"])
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
@@ -45,6 +46,7 @@ async def index(request: Request):
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard(request: Request):
+    """Serve the admin dashboard"""
     return templates.TemplateResponse("admin/dashboard.html", {"request": request})
 
 @app.post("/token")

@@ -3,18 +3,22 @@ from sqlalchemy.orm import Session
 from typing import List
 from app.db.database import get_db
 from app.models.user import User
-from app.schemas.user import UserCreate, UserResponse
-from app.core.auth import get_current_admin_user, get_password_hash
-from datetime import datetime, timedelta
+from app.models.folder_ingestion import FolderIngestion
+from app.core.auth import get_current_user, get_current_admin_user, get_password_hash
+from app.core.config import settings
+from app.schemas.admin import UserResponse, DashboardStats
+from app.schemas.folder_ingestion import FolderIngestionResponse
+from app.schemas.user import UserCreate
 
 router = APIRouter()
 
 @router.post("/users", response_model=UserResponse)
 async def create_user(
     user: UserCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
 ):
+    """Create a new user"""
     db_user = User(
         email=user.email,
         username=user.username,
@@ -27,10 +31,11 @@ async def create_user(
     return db_user
 
 @router.get("/users", response_model=List[UserResponse])
-async def list_users(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_admin_user)
+async def get_users(
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
 ):
+    """Get all users"""
     users = db.query(User).all()
     return users
 
@@ -45,21 +50,44 @@ async def get_user(
         raise HTTPException(status_code=404, detail="User not found")
     return user
 
-@router.get("/dashboard")
-async def get_admin_dashboard_data(current_user: User = Depends(get_current_admin_user), db: Session = Depends(get_db)):
-    # Get total users count
+@router.get("/dashboard", response_model=DashboardStats)
+async def get_dashboard_stats(
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Get dashboard statistics"""
     total_users = db.query(User).count()
-    
-    # Get total documents count (you'll need to implement this based on your document model)
-    total_documents = 0  # Replace with actual document count
-    
-    # Get active users (users who have logged in recently)
-    active_users = db.query(User).filter(User.last_login >= datetime.utcnow() - timedelta(days=7)).count()
+    active_users = db.query(User).filter(User.is_active == True).count()
+    total_documents = db.query(FolderIngestion).count()
     
     return {
         "username": current_user.username,
-        "is_admin": current_user.is_admin,
         "total_users": total_users,
-        "total_documents": total_documents,
-        "active_users": active_users
-    } 
+        "active_users": active_users,
+        "total_documents": total_documents
+    }
+
+@router.get("/folders/ingestions", response_model=List[FolderIngestionResponse])
+async def get_folder_ingestions(
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Get all folder ingestions"""
+    ingestions = db.query(FolderIngestion).all()
+    return ingestions
+
+@router.get("/folders/ingestions/{ingestion_id}", response_model=FolderIngestionResponse)
+async def get_folder_ingestion(
+    ingestion_id: int,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Get folder ingestion details"""
+    ingestion = db.query(FolderIngestion).filter(FolderIngestion.id == ingestion_id).first()
+    if not ingestion:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Folder ingestion not found"
+        )
+    
+    return ingestion 
