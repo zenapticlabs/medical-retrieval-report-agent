@@ -13,7 +13,9 @@ import warnings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import Docx2txtLoader
 from datetime import datetime
-from services.vector_db import VectorDBFactory
+from app.services.vector_db import VectorDBFactory
+from app.core.config import settings
+from typing import List, Dict, Any
 
 # Suppress specific warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -22,21 +24,27 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Download NLTK data
-nltk.download('punkt')
-nltk.download('stopwords')
+# Download NLTK data only if not already downloaded
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt', download_dir='/root/nltk_data')
+try:
+    nltk.data.find('corpora/stopwords')
+except LookupError:
+    nltk.download('stopwords', download_dir='/root/nltk_data')
 
 class DocumentProcessor:
     def __init__(self):
         logger.info("Initializing DocumentProcessor...")
         
         # Initialize vector database service based on USE_OPENSEARCH flag
-        use_opensearch = os.getenv('USE_OPENSEARCH', 'false').lower() == 'true'
+        use_opensearch = settings.USE_OPENSEARCH
         logger.info(f"Using {'OpenSearch' if use_opensearch else 'Elasticsearch'} as vector database")
         
         # Initialize vector database service
         self.vector_db = VectorDBFactory.create_service()
-        self.index_name = os.getenv('OPENSEARCH_INDEX_NAME', 'medical_documents')
+        self.index_name = settings.OPENSEARCH_INDEX_NAME
         
         self.stop_words = set(stopwords.words('english'))
         
@@ -55,19 +63,29 @@ class DocumentProcessor:
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(
                 "FremyCompany/BioLORD-2023",
-                local_files_only=False,
-                force_download=True
+                local_files_only=True,  # Try to use local files first
+                cache_dir='/root/.cache'  # Use the mounted cache directory
             )
             self.model = AutoModel.from_pretrained(
                 "FremyCompany/BioLORD-2023",
-                local_files_only=False,
-                force_download=True
+                local_files_only=True,  # Try to use local files first
+                cache_dir='/root/.cache'  # Use the mounted cache directory
             )
             self.model.eval()
-            logger.info("Model loaded successfully")
+            logger.info("Model loaded successfully from cache")
         except Exception as e:
-            logger.error(f"Error loading model: {str(e)}")
-            raise
+            logger.warning(f"Model not found in cache, downloading: {str(e)}")
+            # If not in cache, download it
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                "FremyCompany/BioLORD-2023",
+                cache_dir='/root/.cache'
+            )
+            self.model = AutoModel.from_pretrained(
+                "FremyCompany/BioLORD-2023",
+                cache_dir='/root/.cache'
+            )
+            self.model.eval()
+            logger.info("Model downloaded and cached successfully")
 
     def get_embedding(self, text):
         """Generate embeddings using BioLORD model with no truncation"""
@@ -347,9 +365,20 @@ class DocumentProcessor:
         return processed_chunks
 
     def create_index(self):
-        """Create or recreate the vector database index"""
-        self.vector_db.delete_index(self.index_name)
-        return self.vector_db.create_index(self.index_name, dimensions=768)
+        """Create or recreate the Elasticsearch index"""
+        try:
+            # Delete existing index if it exists
+            self.vector_db.delete_index()
+            
+            # Create new index
+            success = self.vector_db.create_index()
+            if not success:
+                raise Exception("Failed to create index")
+                
+            logger.info("Successfully created/updated index")
+        except Exception as e:
+            logger.error(f"Error creating index: {str(e)}")
+            raise
 
     def extract_date(self, text):
         """Extract date from text using regex."""
@@ -360,129 +389,109 @@ class DocumentProcessor:
         return None
 
     def process_document(self, docx_path):
+        """
+        Process a single document and return its metadata
+        """
         try:
-            logger.info(f"Processing document: {docx_path}")
+            logger.info(f"Starting to process document: {docx_path}")
             
-            # Use LangChain's Docx2txtLoader to load the document
+            if not os.path.exists(docx_path):
+                logger.error(f"Document file does not exist: {docx_path}")
+                return None
+                
+            # Load document
             loader = Docx2txtLoader(docx_path)
-            documents = loader.load()
+            pages = loader.load()
             
-            if not documents:
+            if not pages:
                 logger.warning(f"No content found in document: {docx_path}")
-                return
-            
-            # Get the full text from the document
-            text = documents[0].page_content
-            metadata = documents[0].metadata
-            
-            logger.info(f"Document loaded. Total length: {len(text)} characters")
-            logger.info(f"Document metadata: {metadata}")
+                return None
+                
+            logger.info(f"Loaded {len(pages)} pages from document")
             
             document_name = os.path.basename(docx_path)
+            pages_processed = 0
             
-            # Get chunks with page information
-            chunks = self.get_chunks_with_pages(text, document_name)
+            # Process each page
+            for i, page in enumerate(pages):
+                text = page.page_content
+                if not text.strip():
+                    continue
+                    
+                # Skip template text
+                if self.is_template_text(text):
+                    logger.info(f"Skipping template text on page {i+1}")
+                    continue
+                    
+                # Extract metadata
+                page_num = self.extract_page_from_text(text) or (i + 1)
+                date = self.extract_date(text)
+                keywords = self.extract_keywords(text)
+                
+                # Generate embedding
+                try:
+                    embedding = self.get_embedding(text)
+                    logger.info(f"Generated embedding for page {page_num}")
+                except Exception as e:
+                    logger.error(f"Error generating embedding for page {page_num}: {str(e)}")
+                    continue
+                
+                # Create document ID
+                doc_id = f"{document_name}_{page_num}"
+                
+                # Index the document
+                try:
+                    success = self.vector_db.index_document(
+                        document_id=doc_id,
+                        document_name=document_name,
+                        page_number=page_num,
+                        content=text,
+                        vector=embedding.tolist()
+                    )
+                    
+                    if success:
+                        pages_processed += 1
+                        logger.info(f"Successfully indexed page {page_num} of {document_name}")
+                    else:
+                        logger.error(f"Failed to index page {page_num} of {document_name}")
+                except Exception as e:
+                    logger.error(f"Error indexing page {page_num} of {document_name}: {str(e)}")
+                    continue
             
-            logger.info(f"Processing {len(chunks)} chunks for document: {document_name}")
-            
-            for i, chunk in enumerate(chunks):
-                logger.info(f"Processing chunk {i+1}/{len(chunks)} on page {chunk['page_number']}")
-                
-                # Generate embedding for the chunk with its context
-                embedding = self.get_embedding(chunk['context'])
-                
-                # Extract date from chunk
-                extracted_date = self.extract_date(chunk['text'])
-                
-                # Store in vector database
-                document = {
-                    "content": chunk['text'],
-                    "context": chunk['context'],
-                    "embedding": embedding.tolist(),
-                    "document_name": document_name,
-                    "chunk_index": i,
-                    "page_number": chunk['page_number'],
-                    "section": chunk['section'],
-                    "keywords": chunk['keywords'],
-                    "metadata": metadata,
-                    "extracted_date": extracted_date
+            if pages_processed > 0:
+                logger.info(f"Successfully processed {pages_processed} pages from {document_name}")
+                return {
+                    "filename": document_name,
+                    "path": docx_path,
+                    "pages_processed": pages_processed
                 }
-                
-                self.vector_db.index_document(self.index_name, document)
-                logger.info(f"Chunk {i+1} processed and stored successfully on page {chunk['page_number']}")
+            else:
+                logger.warning(f"No pages were successfully processed from {document_name}")
+                return None
             
-            logger.info(f"Successfully processed document: {docx_path}")
         except Exception as e:
             logger.error(f"Error processing document {docx_path}: {str(e)}")
-            raise
+            return None
 
-    def search(self, query, top_k=20):  # Default value of 20 for backward compatibility
+    def search(self, query_vector: list, top_k: int = 5) -> List[Dict[str, Any]]:
+        """
+        Search for documents using vector similarity
+        """
         try:
-            # Remove stop words from query
-            # Remove special characters and clean the query
-            query = re.sub(r'[^\w\s]', ' ', query)  # Remove special characters except spaces
-            query = re.sub(r'\s+', ' ', query).strip()  # Normalize whitespace
-            query_words = word_tokenize(query.lower())
-            query_words = [word for word in query_words if word not in self.stop_words]
-            query = " ".join(query_words)
-            
-            # Get query embedding
-            query_embedding = self.get_embedding(query)
-            
-            # Search in vector database with specified top_k
-            results = self.vector_db.search(self.index_name, query_embedding.tolist(), top_k)
-            
-            # Process and format results
-            document_results = {}
-            
-            for result in results:
-                source = result['source']
-                doc_name = source['document_name']
-                content = source['content']
-                score = result['score']  # Get the similarity score
-                
-                if doc_name not in document_results:
-                    document_results[doc_name] = {
-                        'document_name': doc_name,
-                        'chunks': []
-                    }
-                
-                # Find matching keywords in content
-                found_keywords = []
-                highlighted_content = content
-                for keyword in query_words:
-                    if keyword.lower() in content.lower():
-                        found_keywords.append(keyword)
-                        # Create regex pattern for whole word match
-                        pattern = r'\b' + re.escape(keyword) + r'\b'
-                        highlighted_content = re.sub(
-                            pattern,
-                            lambda m: f'<span class="highlight">{m.group(0)}</span>',
-                            highlighted_content,
-                            flags=re.IGNORECASE
-                        )
-                
-                # Add chunk with its score, highlighted content, and found keywords
-                document_results[doc_name]['chunks'].append({
-                    'content': highlighted_content,
-                    'score': score,
-                    'page_number': source.get('page_number', 1),
-                    'found_keywords': found_keywords,
-                    'semantic_score': score  # This will be used when no keywords are found
-                })
-            
-            # Sort chunks by score within each document
-            for doc_name in document_results:
-                document_results[doc_name]['chunks'].sort(key=lambda x: x['score'], reverse=True)
-            
-            return document_results
+            return self.vector_db.search(query_vector=query_vector, top_k=top_k)
         except Exception as e:
-            logger.error(f"Error performing search: {str(e)}")
-            return {}
+            logger.error(f"Error searching documents: {str(e)}")
+            return []
 
-    def list_documents(self):
-        """List all documents in the index"""
-        return self.vector_db.list_documents(self.index_name)
+    def list_documents(self) -> List[Dict[str, Any]]:
+        """
+        List all documents in the index
+        """
+        try:
+            return self.vector_db.list_documents()
+        except Exception as e:
+            logger.error(f"Error listing documents: {str(e)}")
+            return []
 
     def get_document_content(self, document_name):
         """Get all chunks of a specific document organized by page"""
@@ -537,46 +546,49 @@ class DocumentProcessor:
             return None
 
     def process_all_documents(self, documents_dir):
-        """Process all documents in the directory, dropping old data first"""
-        processed_files = []
-        
+        """
+        Process all documents in the specified directory
+        """
         try:
+            logger.info(f"Starting to process documents in directory: {documents_dir}")
+            
             if not os.path.exists(documents_dir):
-                logger.error(f"Documents directory not found: {documents_dir}")
-                return processed_files
+                logger.error(f"Documents directory does not exist: {documents_dir}")
+                return []
             
-            # Create fresh index
+            # Create or recreate the index
+            logger.info("Creating/updating Elasticsearch index...")
             self.create_index()
+            logger.info("Index created/updated successfully")
+                
+            processed_files = []
             
-            # First, collect all .docx files
-            docx_files = []
+            # Walk through all subdirectories
             for root, dirs, files in os.walk(documents_dir):
+                logger.info(f"Scanning directory: {root}")
+                logger.info(f"Found {len(files)} files in {root}")
+                
                 for file in files:
                     if file.endswith('.docx'):
-                        docx_files.append(os.path.join(root, file))
+                        file_path = os.path.join(root, file)
+                        logger.info(f"Processing file: {file_path}")
+                        try:
+                            result = self.process_document(file_path)
+                            if result:
+                                processed_files.append(result)
+                                logger.info(f"Successfully processed: {file}")
+                            else:
+                                logger.warning(f"No content extracted from: {file}")
+                        except Exception as e:
+                            logger.error(f"Error processing file {file}: {str(e)}")
+                            continue
             
-            if not docx_files:
-                logger.warning(f"No .docx files found in directory: {documents_dir}")
-                return processed_files
-            
-            logger.info(f"Found {len(docx_files)} .docx files to process")
-            
-            # Then process each file
-            for file_path in docx_files:
-                try:
-                    logger.info(f"Processing document: {file_path}")
-                    self.process_document(file_path)
-                    processed_files.append(file_path)
-                except Exception as e:
-                    logger.error(f"Error processing file {file_path}: {str(e)}")
-                    continue  # Continue with next file even if one fails
-            
-            logger.info(f"Successfully processed {len(processed_files)} out of {len(docx_files)} files")
+            logger.info(f"Total files processed: {len(processed_files)}")
             return processed_files
             
         except Exception as e:
             logger.error(f"Error in process_all_documents: {str(e)}")
-            return processed_files  # Return empty list instead of raising
+            raise
 
     def extract_date_near_keyword(self, text, keyword, window_size=100):
         """Extract date that appears before a keyword within a window of text."""

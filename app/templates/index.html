@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Medical Document Search</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        /* ... existing styles ... */
+    </style>
+</head>
+<body>
+    <div class="container mt-5">
+        <h1 class="mb-4">Medical Document Search</h1>
+        
+        <div class="search-container">
+            <div class="row">
+                <div class="col-md-8">
+                    <div class="input-group mb-3">
+                        <input type="text" id="searchInput" class="form-control" placeholder="Enter your medical search query...">
+                        <button class="btn btn-primary" onclick="search()">Search</button>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="input-group mb-3">
+                        <label class="input-group-text" for="resultCount">Results</label>
+                        <select class="form-select" id="resultCount">
+                            <option value="5">5 results</option>
+                            <option value="10">10 results</option>
+                            <option value="20" selected>20 results</option>
+                            <option value="30">30 results</option>
+                            <option value="50">50 results</option>
+                            <option value="75">75 results</option>
+                            <option value="100">100 results</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="loading" class="loading" style="display: none;">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="mt-2">Processing your request...</p>
+        </div>
+
+        <div id="results" class="mt-4"></div>
+    </div>
+
+    <script>
+        function showLoading() {
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('results').innerHTML = '';
+        }
+
+        function hideLoading() {
+            document.getElementById('loading').style.display = 'none';
+        }
+
+        function highlightText(text, query) {
+            const words = query.toLowerCase().split(' ');
+            let highlightedText = text;
+            words.forEach(word => {
+                if (word.length > 3) {
+                    const regex = new RegExp(`\\b${word}\\b`, 'gi');
+                    highlightedText = highlightedText.replace(regex, match => `<span class="highlight">${match}</span>`);
+                }
+            });
+            return highlightedText;
+        }
+
+        function formatScore(score) {
+            return parseFloat(score).toFixed(2);
+        }
+
+        function cleanTextFormatting(text) {
+            let cleaned = text.replace(/\n+/g, ' ');
+            cleaned = cleaned.replace(/\s+/g, ' ');
+            return cleaned.trim();
+        }
+
+        async function search() {
+            const query = document.getElementById('searchInput').value;
+            const topK = parseInt(document.getElementById('resultCount').value);
+            if (!query) return;
+
+            showLoading();
+
+            try {
+                const response = await fetch('/api/search', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ 
+                        query: query,
+                        top_k: topK
+                    })
+                });
+                
+                const data = await response.json();
+                hideLoading();
+                const resultsDiv = document.getElementById('results');
+                resultsDiv.innerHTML = '';
+                
+                if (data.error) {
+                    resultsDiv.innerHTML = `<div class="alert alert-danger">${data.error}</div>`;
+                    return;
+                }
+                
+                if (!data.results || typeof data.results !== 'object') {
+                    resultsDiv.innerHTML = '<div class="alert alert-info">No results found. Try different search terms.</div>';
+                    return;
+                }
+                
+                // Create main accordion
+                const mainAccordion = document.createElement('div');
+                mainAccordion.className = 'accordion';
+                mainAccordion.id = 'mainAccordion';
+                
+                let accordionItemCount = 0;
+                
+                // Iterate over each document
+                for (const docName in data.results) {
+                    const doc = data.results[docName];
+                    accordionItemCount++;
+                    
+                    // Create accordion item for document
+                    const accordionItem = document.createElement('div');
+                    accordionItem.className = 'accordion-item';
+                    
+                    const headerId = `heading${accordionItemCount}`;
+                    const collapseId = `collapse${accordionItemCount}`;
+                    
+                    accordionItem.innerHTML = `
+                        <h2 class="accordion-header" id="${headerId}">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" 
+                                    data-bs-target="#${collapseId}" aria-expanded="false" aria-controls="${collapseId}">
+                                <div class="w-100 d-flex justify-content-between align-items-center me-3">
+                                    <span>${doc.document_name}</span>
+                                    <span class="badge bg-primary">${doc.chunks.length} results</span>
+                                </div>
+                            </button>
+                        </h2>
+                        <div id="${collapseId}" class="accordion-collapse collapse" aria-labelledby="${headerId}">
+                            <div class="accordion-body">
+                                <div class="chunks-accordion accordion" id="chunksAccordion${accordionItemCount}">
+                                    ${doc.chunks.map((chunk, index) => `
+                                        <div class="accordion-item">
+                                            <h2 class="accordion-header" id="chunkHeading${accordionItemCount}_${index}">
+                                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" 
+                                                        data-bs-target="#chunkCollapse${accordionItemCount}_${index}" 
+                                                        aria-expanded="false" 
+                                                        aria-controls="chunkCollapse${accordionItemCount}_${index}">
+                                                    <div class="w-100 d-flex justify-content-between align-items-center">
+                                                        <div class="d-flex align-items-center">
+                                                            <span class="me-2">Content ${index + 1} <span class="badge bg-secondary ms-2">Page ${chunk.page_number}</span></span>
+                                                            ${chunk.found_keywords && chunk.found_keywords.length > 0 
+                                                                ? `<div class="d-flex gap-2">
+                                                                   
+                                                                <span class="keyword-badge">exact keywords (${chunk.found_keywords.join(', ')} ) with Score: ${formatScore(chunk.score)}</span>
+                                                                  
+                                                                   </div>`
+                                                                : `<span class="semantic-badge">Semantic Match with Score: ${formatScore(chunk.semantic_score)}</span>`
+                                                            }
+                                                        </div>
+                                                        
+                                                    </div>
+                                                </button>
+                                            </h2>
+                                            <div id="chunkCollapse${accordionItemCount}_${index}" 
+                                                 class="accordion-collapse collapse" 
+                                                 aria-labelledby="chunkHeading${accordionItemCount}_${index}">
+                                                <div class="accordion-body">
+                                                    <div class="content">
+                                                        ${cleanTextFormatting(chunk.content)}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    
+                    mainAccordion.appendChild(accordionItem);
+                }
+                
+                resultsDiv.appendChild(mainAccordion);
+            } catch (error) {
+                hideLoading();
+                document.getElementById('results').innerHTML = 
+                    `<div class="alert alert-danger">Error: ${error.message}</div>`;
+            }
+        }
+
+        async function processDocuments() {
+            showLoading();
+            
+            try {
+                const response = await fetch('/api/process', {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                hideLoading();
+                
+                if (data.error) {
+                    alert('Error processing documents: ' + data.error);
+                    return;
+                }
+                
+                const files = data.files || [];
+                
+                if (data.status === 'success') {
+                    alert(`Successfully processed ${files.length} documents!`);
+                } else if (data.status === 'warning') {
+                    alert('No documents were processed. Please check the documents directory.');
+                } else {
+                    alert('Processing completed with status: ' + data.status);
+                }
+            } catch (error) {
+                hideLoading();
+                console.error('Error:', error);
+                alert('Error processing documents. Please check the console for details.');
+            }
+        }
+
+        // Allow search on Enter key
+        document.getElementById('searchInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                search();
+            }
+        });
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html> 
