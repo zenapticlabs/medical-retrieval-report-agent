@@ -391,9 +391,15 @@
                         </td>
                         <td>${new Date(ingestion.created_at).toLocaleString()}</td>
                         <td>
-                            <button class="btn btn-sm btn-info" onclick="viewDetails(${ingestion.id})">
+                            <button class="btn btn-sm btn-info me-2" onclick="viewDetails(${ingestion.id})">
                                 View Details
                             </button>
+                            ${ingestion.status === 'COMPLETED' && ingestion.download_url ? 
+                                `<button class="btn btn-sm btn-success" onclick="downloadFile(${ingestion.id})">
+                                    <i class="fas fa-download"></i> Download
+                                </button>` : 
+                                ''
+                            }
                         </td>
                     `;
                     tbody.appendChild(row);
@@ -503,9 +509,54 @@
                 }
 
                 const ingestion = await response.json();
-                alert(JSON.stringify(ingestion, null, 2));
+                
+                // Create a more user-friendly details display
+                const details = `
+                    Folder Path: ${ingestion.folder_path}
+                    Status: ${ingestion.status}
+                    Created: ${new Date(ingestion.created_at).toLocaleString()}
+                    ${ingestion.processed_files_count ? `Files Processed: ${ingestion.processed_files_count}` : ''}
+                    ${ingestion.error_message ? `Error: ${ingestion.error_message}` : ''}
+                `;
+                alert(details);
             } catch (error) {
                 console.error('Error fetching ingestion details:', error);
+                alert('Error fetching details');
+            }
+        }
+
+        // Function to download completed file
+        async function downloadFile(ingestionId) {
+            const token = localStorage.getItem('token');
+            if (!token) {
+                window.location.href = '/login';
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/folders/ingestions/${ingestionId}/download`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
+                if (response.status === 401 || response.status === 403) {
+                    window.location.href = '/login';
+                    return;
+                }
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to get download URL');
+                }
+
+                const data = await response.json();
+                
+                // Open download URL in new tab
+                window.open(data.download_url, '_blank');
+            } catch (error) {
+                console.error('Error downloading file:', error);
+                alert(error.message || 'Error downloading file');
             }
         }
 

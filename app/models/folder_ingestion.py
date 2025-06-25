@@ -19,6 +19,8 @@ class FolderIngestion(Base):
     user_id = Column(Integer, ForeignKey("users.id"))
     lambda_job_id = Column(String(255), nullable=True)
     error_message = Column(String(1000), nullable=True)
+    download_url = Column(String(1000), nullable=True)
+    processed_files_count = Column(Integer, nullable=True, default=0)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

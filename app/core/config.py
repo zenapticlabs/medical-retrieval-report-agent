@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     AWS_ACCESS_KEY_ID: Optional[str] = os.getenv("AWS_ACCESS_KEY_ID")
     AWS_SECRET_ACCESS_KEY: Optional[str] = os.getenv("AWS_SECRET_ACCESS_KEY")
     
+    # Lambda function settings
+    LAMBDA_FUNCTION_NAME: str = os.getenv("LAMBDA_FUNCTION_NAME", "chronology-summaries-SharePointChronologyFunction-j91ttACGYNQq")
+    BASE_URL: str = os.getenv("BASE_URL", "http://localhost:8000")
+    
     # SharePoint settings
     SHAREPOINT_TENANT_ID: str = os.getenv("SHAREPOINT_TENANT_ID")
     SHAREPOINT_CLIENT_ID: str = os.getenv("SHAREPOINT_CLIENT_ID")

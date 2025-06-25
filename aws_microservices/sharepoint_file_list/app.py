@@ -718,6 +718,33 @@ def lambda_handler(event, context):
         download_url = upload_to_s3(doc_content, s3_key)
         logger.info(f"Document uploaded successfully. Download URL: {download_url}")
         
+        # Call back to update the ingestion status if callback URL is provided
+        callback_url = body.get('callback_url')
+        if callback_url:
+            try:
+                callback_payload = {
+                    "status": "COMPLETED",
+                    "download_url": f"s3://{S3_BUCKET}/{s3_key}",
+                    "processed_files_count": len(files_data)
+                }
+                
+                logger.info(f"Calling back to: {callback_url}")
+                callback_response = requests.patch(
+                    callback_url,
+                    json=callback_payload,
+                    headers={'Content-Type': 'application/json'},
+                    timeout=30
+                )
+                
+                if callback_response.status_code == 200:
+                    logger.info("Successfully updated ingestion status via callback")
+                else:
+                    logger.warning(f"Callback failed with status {callback_response.status_code}: {callback_response.text}")
+                    
+            except Exception as callback_error:
+                logger.error(f"Error calling callback URL: {str(callback_error)}")
+                # Don't fail the main process if callback fails
+        
         return {
             'statusCode': 200,
             'headers': {
@@ -737,6 +764,41 @@ def lambda_handler(event, context):
         
     except Exception as e:
         logger.error(f"Lambda handler error: {str(e)}")
+        
+        # Call back to update the ingestion status to FAILED if callback URL is provided
+        try:
+            # Parse the input to get callback URL
+            if 'body' in event:
+                if isinstance(event['body'], str):
+                    body = json.loads(event['body'])
+                else:
+                    body = event['body']
+            else:
+                body = event
+            
+            callback_url = body.get('callback_url')
+            if callback_url:
+                callback_payload = {
+                    "status": "FAILED",
+                    "error_message": str(e)
+                }
+                
+                logger.info(f"Calling back to update status to FAILED: {callback_url}")
+                callback_response = requests.patch(
+                    callback_url,
+                    json=callback_payload,
+                    headers={'Content-Type': 'application/json'},
+                    timeout=30
+                )
+                
+                if callback_response.status_code == 200:
+                    logger.info("Successfully updated ingestion status to FAILED via callback")
+                else:
+                    logger.warning(f"Callback failed with status {callback_response.status_code}: {callback_response.text}")
+                    
+        except Exception as callback_error:
+            logger.error(f"Error calling callback URL for failure: {str(callback_error)}")
+        
         return {
             'statusCode': 500,
             'headers': {
