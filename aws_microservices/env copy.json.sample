@@ -1,0 +1,10 @@
+{
+  "SharePointChronologyFunction": {
+    "TENANT_ID": "89de9bdc-3988-40cd-*****************",
+    "CLIENT_ID": "22eb4926*************-ac16-ba2bd58d9683",
+    "CLIENT_SECRET": "zw08Q~YSj*********************aVG",
+    "SITE_ID": "50099b******************3a35",
+    "OPENAI_API_KEY": "sk-*******************************66_EA",
+    "S3_BUCKET": "medica***********ogy"
+  }
+} 
