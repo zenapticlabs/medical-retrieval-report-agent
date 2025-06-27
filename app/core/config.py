@@ -54,10 +54,10 @@ class Settings(BaseSettings):
     MYSQL_HOST: str = "mysql"
     MYSQL_PORT: int = 3306
     
-    # JWT settings
-    JWT_SECRET_KEY: str
+    # JWT settings - Extended for better user experience
+    JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
     JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))  # 8 hours default
     
     class Config:
         env_file = ".env"

@@ -32,6 +32,9 @@
             display: none;
             margin-left: 10px;
         }
+        .alert {
+            margin-top: 1rem;
+        }
     </style>
 </head>
 <body class="bg-light">
@@ -43,22 +46,28 @@
             </button>
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav me-auto">
-                    
                     <li class="nav-item">
                         <a class="nav-link active" href="/admin/folders">Folder Ingestion</a>
                     </li>
                 </ul>
-                <button class="btn btn-light" onclick="logout()">Logout</button>
+                <div class="navbar-nav">
+                    <span class="navbar-text me-3">
+                        Welcome, <span id="admin-username">Loading...</span>
+                    </span>
+                    <button class="btn btn-light" onclick="logout()">Logout</button>
+                </div>
             </div>
         </div>
     </nav>
 
     <div class="container mt-4">
+        <div id="alertContainer"></div>
+        
         <div class="row">
             <div class="col-md-3">
                 <div class="card mb-4">
                     <div class="card-body">
-                        <h5 class="card-title">Welcome, <span id="admin-username">Loading...</span></h5>
+                        <h5 class="card-title">Welcome, <span id="admin-username-card">Loading...</span></h5>
                         <p class="card-text text-muted">Admin Dashboard</p>
                     </div>
                 </div>
@@ -161,68 +170,111 @@
         let currentPage = 1;
         const pageSize = 10;
 
+        // Show alert message
+        function showAlert(message, type = 'danger') {
+            const alertContainer = document.getElementById('alertContainer');
+            alertContainer.innerHTML = `
+                <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+                    ${message}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            `;
+        }
+
+        // Clear alert
+        function clearAlert() {
+            document.getElementById('alertContainer').innerHTML = '';
+        }
+
+        // Check authentication status
+        async function checkAuth() {
+            try {
+                const response = await fetch('/api/me', {
+                    credentials: 'include'
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Not authenticated');
+                }
+                
+                const userData = await response.json();
+                
+                if (!userData.is_admin) {
+                    throw new Error('Not authorized');
+                }
+                
+                return userData;
+            } catch (error) {
+                console.error('Authentication error:', error);
+                window.location.href = '/login';
+                return null;
+            }
+        }
+
         // Function to handle logout
-        function logout() {
-            localStorage.removeItem('token');
-            window.location.href = '/login';
+        async function logout() {
+            try {
+                await fetch('/api/logout', {
+                    method: 'POST',
+                    credentials: 'include'
+                });
+            } catch (error) {
+                console.error('Logout error:', error);
+            } finally {
+                localStorage.removeItem('token');
+                localStorage.removeItem('user');
+                window.location.href = '/login';
+            }
         }
 
         // Function to fetch admin dashboard data
         async function fetchDashboardData() {
-            const token = localStorage.getItem('token');
-            if (!token) {
-                window.location.href = '/login';
-                return;
-            }
-
             try {
                 const response = await fetch('/api/admin/dashboard', {
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
+                    credentials: 'include'
                 });
 
-                if (response.status === 401 || response.status === 403) {
-                    window.location.href = '/login';
-                    return;
+                if (!response.ok) {
+                    if (response.status === 401 || response.status === 403) {
+                        window.location.href = '/login';
+                        return;
+                    }
+                    throw new Error('Failed to fetch dashboard data');
                 }
 
                 const data = await response.json();
                 document.getElementById('admin-username').textContent = data.username;
+                document.getElementById('admin-username-card').textContent = data.username;
                 document.getElementById('total-users').textContent = data.total_users || '0';
                 document.getElementById('total-documents').textContent = data.total_documents || '0';
                 document.getElementById('active-users').textContent = data.active_users || '0';
             } catch (error) {
                 console.error('Error fetching dashboard data:', error);
-                window.location.href = '/login';
+                showAlert('Failed to load dashboard data: ' + error.message);
             }
         }
 
         // Function to fetch folder structure
         async function fetchFolderStructure(path = '') {
-            const token = localStorage.getItem('token');
-            if (!token) {
-                window.location.href = '/login';
-                return;
-            }
-
             try {
                 loadingSpinner.style.display = 'inline-block';
                 const response = await fetch(`/api/folders/list?path=${encodeURIComponent(path)}`, {
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
+                    credentials: 'include'
                 });
 
-                if (response.status === 401 || response.status === 403) {
-                    window.location.href = '/login';
-                    return;
+                if (!response.ok) {
+                    if (response.status === 401 || response.status === 403) {
+                        window.location.href = '/login';
+                        return [];
+                    }
+                    throw new Error('Failed to fetch folder structure');
                 }
 
                 const folders = await response.json();
                 return folders;
             } catch (error) {
                 console.error('Error fetching folder structure:', error);
+                showAlert('Failed to load folder structure: ' + error.message);
                 return [];
             } finally {
                 loadingSpinner.style.display = 'none';
@@ -278,42 +330,16 @@
             }
         }
 
-        // Function to handle folder selection
-        function selectFolder(folderPath) {
-            selectedFolderPath = folderPath;
-            document.getElementById('selectedFolderPath').value = folderPath;
-            
-            // Enable/disable Start Ingestion button based on folder level
-            const pathParts = folderPath.split('/');
-            const isThirdLevel = pathParts.length === 3;
-            document.getElementById('startIngestionBtn').disabled = !isThirdLevel;
-            
-            // Update selected state in folder tree
-            document.querySelectorAll('.folder-item').forEach(item => {
-                if (item.dataset.path === folderPath) {
-                    item.classList.add('selected');
-                } else {
-                    item.classList.remove('selected');
-                }
-            });
-        }
-
         // Function to start ingestion
         async function startIngestion() {
             if (!selectedFolderPath) {
-                alert('Please select a folder first');
+                showAlert('Please select a folder first');
                 return;
             }
 
             const pathParts = selectedFolderPath.split('/');
             if (pathParts.length !== 3) {
-                alert('Ingestion is only allowed at the 3rd level of the folder structure');
-                return;
-            }
-
-            const token = localStorage.getItem('token');
-            if (!token) {
-                window.location.href = '/login';
+                showAlert('Ingestion is only allowed at the 3rd level of the folder structure');
                 return;
             }
 
@@ -321,21 +347,23 @@
                 const response = await fetch('/api/folders/ingest', {
                     method: 'POST',
                     headers: {
-                        'Authorization': `Bearer ${token}`,
                         'Content-Type': 'application/json'
                     },
+                    credentials: 'include',
                     body: JSON.stringify({ folder_path: selectedFolderPath })
                 });
 
-                if (response.status === 401 || response.status === 403) {
-                    window.location.href = '/login';
-                    return;
-                }
-
                 if (!response.ok) {
+                    if (response.status === 401 || response.status === 403) {
+                        window.location.href = '/login';
+                        return;
+                    }
                     const error = await response.json();
                     throw new Error(error.detail || 'Failed to start ingestion');
                 }
+
+                const result = await response.json();
+                showAlert('Ingestion started successfully!', 'success');
 
                 // Clear selection and refresh history
                 selectedFolderPath = '';
@@ -346,28 +374,23 @@
                 });
                 fetchIngestionHistory();
             } catch (error) {
-                alert(error.message);
+                showAlert(error.message);
             }
         }
 
         // Function to fetch ingestion history
         async function fetchIngestionHistory(page = 1) {
-            const token = localStorage.getItem('token');
-            if (!token) {
-                window.location.href = '/login';
-                return;
-            }
-
             try {
                 const response = await fetch(`/api/folders/ingestions?page=${page}&page_size=${pageSize}`, {
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
+                    credentials: 'include'
                 });
 
-                if (response.status === 401 || response.status === 403) {
-                    window.location.href = '/login';
-                    return;
+                if (!response.ok) {
+                    if (response.status === 401 || response.status === 403) {
+                        window.location.href = '/login';
+                        return;
+                    }
+                    throw new Error('Failed to fetch ingestion history');
                 }
 
                 const data = await response.json();
@@ -409,6 +432,7 @@
                 updatePagination(data.page, data.total_pages);
             } catch (error) {
                 console.error('Error fetching ingestion history:', error);
+                showAlert('Failed to load ingestion history: ' + error.message);
             }
         }
 
@@ -490,22 +514,17 @@
 
         // Function to view ingestion details
         async function viewDetails(ingestionId) {
-            const token = localStorage.getItem('token');
-            if (!token) {
-                window.location.href = '/login';
-                return;
-            }
-
             try {
                 const response = await fetch(`/api/folders/ingestions/${ingestionId}`, {
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
+                    credentials: 'include'
                 });
 
-                if (response.status === 401 || response.status === 403) {
-                    window.location.href = '/login';
-                    return;
+                if (!response.ok) {
+                    if (response.status === 401 || response.status === 403) {
+                        window.location.href = '/login';
+                        return;
+                    }
+                    throw new Error('Failed to fetch ingestion details');
                 }
 
                 const ingestion = await response.json();
@@ -521,31 +540,22 @@
                 alert(details);
             } catch (error) {
                 console.error('Error fetching ingestion details:', error);
-                alert('Error fetching details');
+                showAlert('Error fetching details: ' + error.message);
             }
         }
 
         // Function to download completed file
         async function downloadFile(ingestionId) {
-            const token = localStorage.getItem('token');
-            if (!token) {
-                window.location.href = '/login';
-                return;
-            }
-
             try {
                 const response = await fetch(`/api/folders/ingestions/${ingestionId}/download`, {
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
+                    credentials: 'include'
                 });
 
-                if (response.status === 401 || response.status === 403) {
-                    window.location.href = '/login';
-                    return;
-                }
-
                 if (!response.ok) {
+                    if (response.status === 401 || response.status === 403) {
+                        window.location.href = '/login';
+                        return;
+                    }
                     const error = await response.json();
                     throw new Error(error.detail || 'Failed to get download URL');
                 }
@@ -556,12 +566,19 @@
                 window.open(data.download_url, '_blank');
             } catch (error) {
                 console.error('Error downloading file:', error);
-                alert(error.message || 'Error downloading file');
+                showAlert(error.message || 'Error downloading file');
             }
         }
 
         // Initialize dashboard and folder tree when page loads
-        document.addEventListener('DOMContentLoaded', () => {
+        document.addEventListener('DOMContentLoaded', async () => {
+            // Check authentication first
+            const userData = await checkAuth();
+            if (!userData) {
+                return; // Will redirect to login
+            }
+            
+            // Initialize dashboard
             fetchDashboardData();
             createFolderTree(document.getElementById('folderTree'));
             fetchIngestionHistory();

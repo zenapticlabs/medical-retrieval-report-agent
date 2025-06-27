@@ -33,9 +33,7 @@ lambda_client = boto3.client(
 
 @router.get("/folders/list")
 async def list_folders(
-    path: Optional[str] = Query("", description="Path to list folders from"),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    path: Optional[str] = Query("", description="Path to list folders from")
 ):
     """List folders from SharePoint"""
     try:

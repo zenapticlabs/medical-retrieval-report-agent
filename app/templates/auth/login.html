@@ -36,6 +36,13 @@
             background-color: #34495e;
             border-color: #34495e;
         }
+        .alert {
+            margin-top: 1rem;
+        }
+        .spinner-border-sm {
+            width: 1rem;
+            height: 1rem;
+        }
     </style>
 </head>
 <body>
@@ -47,7 +54,7 @@
             <div class="card-body">
                 <form id="loginForm">
                     <div class="mb-3">
-                        <label for="username" class="form-label">Username</label>
+                        <label for="username" class="form-label">Username or Email</label>
                         <input type="text" class="form-control" id="username" required>
                     </div>
                     <div class="mb-3">
@@ -55,9 +62,13 @@
                         <input type="password" class="form-control" id="password" required>
                     </div>
                     <div class="d-grid">
-                        <button type="submit" class="btn btn-primary">Login</button>
+                        <button type="submit" class="btn btn-primary" id="loginBtn">
+                            <span id="loginText">Login</span>
+                            <span id="loginSpinner" class="spinner-border spinner-border-sm ms-2" style="display: none;"></span>
+                        </button>
                     </div>
                 </form>
+                <div id="alertContainer"></div>
                 <div class="mt-3 text-center">
                     <a href="/" class="text-decoration-none">Back to Home</a>
                 </div>
@@ -66,21 +77,67 @@
     </div>
 
     <script>
-        // Add token to all fetch requests
-        const originalFetch = window.fetch;
-        window.fetch = function(url, options = {}) {
-            const token = localStorage.getItem('token');
-            if (token) {
-                options.headers = {
-                    ...options.headers,
-                    'Authorization': `Bearer ${token}`
-                };
+        // Check if user is already logged in
+        async function checkAuthStatus() {
+            try {
+                const response = await fetch('/api/me', {
+                    credentials: 'include'
+                });
+                
+                if (response.ok) {
+                    const userData = await response.json();
+                    // User is already logged in, redirect to appropriate page
+                    if (userData.is_admin) {
+                        window.location.href = '/admin';
+                    } else {
+                        window.location.href = '/';
+                    }
+                }
+            } catch (error) {
+                // User is not logged in, stay on login page
+                console.log('User not authenticated');
             }
-            return originalFetch(url, options);
-        };
+        }
 
+        // Show alert message
+        function showAlert(message, type = 'danger') {
+            const alertContainer = document.getElementById('alertContainer');
+            alertContainer.innerHTML = `
+                <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+                    ${message}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            `;
+        }
+
+        // Clear alert
+        function clearAlert() {
+            document.getElementById('alertContainer').innerHTML = '';
+        }
+
+        // Set loading state
+        function setLoading(loading) {
+            const loginBtn = document.getElementById('loginBtn');
+            const loginText = document.getElementById('loginText');
+            const loginSpinner = document.getElementById('loginSpinner');
+            
+            if (loading) {
+                loginBtn.disabled = true;
+                loginText.textContent = 'Logging in...';
+                loginSpinner.style.display = 'inline-block';
+            } else {
+                loginBtn.disabled = false;
+                loginText.textContent = 'Login';
+                loginSpinner.style.display = 'none';
+            }
+        }
+
+        // Handle login form submission
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
             e.preventDefault();
+            
+            clearAlert();
+            setLoading(true);
             
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
@@ -95,35 +152,40 @@
                         'username': username,
                         'password': password,
                     }),
+                    credentials: 'include'
                 });
 
                 const data = await response.json();
 
                 if (response.ok) {
+                    // Store token in localStorage for API calls
                     localStorage.setItem('token', data.access_token);
-                    // Add token to Authorization header for all future requests
-                    const token = data.access_token;
-                    const headers = new Headers();
-                    headers.append('Authorization', `Bearer ${token}`);
+                    localStorage.setItem('user', JSON.stringify(data.user));
                     
-                    // Make a request to /admin with the token
-                    const adminResponse = await fetch('/admin', {
-                        headers: headers
-                    });
+                    // Show success message
+                    showAlert('Login successful! Redirecting...', 'success');
                     
-                    if (adminResponse.ok) {
-                        window.location.href = '/admin';
-                    } else {
-                        alert('Failed to access admin dashboard');
-                    }
+                    // Redirect after a short delay
+                    setTimeout(() => {
+                        if (data.user.is_admin) {
+                            window.location.href = '/admin';
+                        } else {
+                            window.location.href = '/';
+                        }
+                    }, 1000);
                 } else {
-                    alert('Invalid username or password');
+                    showAlert(data.detail || 'Login failed. Please check your credentials.');
                 }
             } catch (error) {
                 console.error('Error:', error);
-                alert('An error occurred during login');
+                showAlert('An error occurred during login. Please try again.');
+            } finally {
+                setLoading(false);
             }
         });
+
+        // Check auth status when page loads
+        document.addEventListener('DOMContentLoaded', checkAuthStatus);
     </script>
 </body>
 </html> 

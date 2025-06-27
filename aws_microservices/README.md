@@ -114,6 +114,29 @@ The function requires these environment variables:
 - `OPENAI_API_KEY`: OpenAI API Key for GPT-4
 - `S3_BUCKET`: S3 bucket name (default: "medical-chronology")
 
+### Setting Up Local Environment
+
+1. Copy the sample environment file:
+   ```bash
+   cp env.json.sample env.json
+   ```
+
+2. Edit `env.json` with your actual values:
+   ```json
+   {
+     "SharePointChronologyFunction": {
+       "TENANT_ID": "your-actual-tenant-id",
+       "CLIENT_ID": "your-actual-client-id",
+       "CLIENT_SECRET": "your-actual-client-secret",
+       "SITE_ID": "your-actual-site-id",
+       "OPENAI_API_KEY": "your-actual-openai-key",
+       "S3_BUCKET": "medical-chronology"
+     }
+   }
+   ```
+
+**Important**: Never commit `env.json` to version control as it contains sensitive information.
+
 ## File Processing
 
 ### Supported File Types

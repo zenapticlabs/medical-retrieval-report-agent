@@ -3,6 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import os
 from datetime import datetime
@@ -25,6 +26,15 @@ app = FastAPI(
     title="Medical Document Search System",
     description="A powerful medical document search system using AI",
     version="1.0.0"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify your frontend domain
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Mount static files
@@ -63,19 +73,58 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
             headers={"WWW-Authenticate": "Bearer"},
         )
     
+    # Check if user is active
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User account is deactivated"
+        )
+    
     # Update last login time
     user.last_login = datetime.utcnow()
     db.commit()
     
+    # Create access token with extended expiration
     access_token = create_access_token(data={"sub": user.username})
-    response = JSONResponse(content={"access_token": access_token, "token_type": "bearer"})
+    
+    response = JSONResponse(content={
+        "access_token": access_token, 
+        "token_type": "bearer",
+        "user": {
+            "username": user.username,
+            "email": user.email,
+            "is_admin": user.is_admin
+        }
+    })
+    
+    # Set cookie with better parameters
     response.set_cookie(
         key="access_token",
         value=access_token,
         httponly=True,
         samesite="lax",
-        secure=False  # Set to True if using HTTPS
+        secure=False,  # Set to True if using HTTPS
+        max_age=8 * 60 * 60,  # 8 hours in seconds
+        path="/"
     )
+    
+    return response
+
+@app.get("/api/me")
+async def get_current_user_info(current_user: User = Depends(get_current_user)):
+    """Get current user information"""
+    return {
+        "username": current_user.username,
+        "email": current_user.email,
+        "is_admin": current_user.is_admin,
+        "is_active": current_user.is_active
+    }
+
+@app.post("/api/logout")
+async def logout():
+    """Logout user by clearing cookie"""
+    response = JSONResponse(content={"message": "Successfully logged out"})
+    response.delete_cookie(key="access_token", path="/")
     return response
 
 @app.get("/login", response_class=HTMLResponse)
