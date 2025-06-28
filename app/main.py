@@ -53,10 +53,10 @@ app.include_router(folder_ingestion.router, prefix="/api", tags=["folder_ingesti
 sharepoint_service = SharePointService()
 
 async def refresh_sharepoint_token_periodically():
-    """Background task to refresh SharePoint token every 30 minutes"""
+    """Background task to refresh SharePoint token every 15 minutes"""
     while True:
         try:
-            await asyncio.sleep(1800)  # 30 minutes
+            await asyncio.sleep(900)  # 15 minutes
             sharepoint_service.refresh_token_if_needed()
             logger.info("SharePoint token refreshed successfully")
         except Exception as e:
@@ -207,6 +207,22 @@ async def refresh_sharepoint_token():
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to refresh SharePoint token: {str(e)}"
+        )
+
+@app.get("/api/force-refresh-sharepoint-token")
+async def force_refresh_sharepoint_token():
+    """Force refresh SharePoint token regardless of expiration"""
+    try:
+        token = sharepoint_service.force_refresh_token()
+        return {
+            "message": "SharePoint token force refreshed successfully",
+            "token_length": len(token) if token else 0
+        }
+    except Exception as e:
+        logger.error(f"Failed to force refresh SharePoint token: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to force refresh SharePoint token: {str(e)}"
         )
 
 @app.get("/api/test-sharepoint")

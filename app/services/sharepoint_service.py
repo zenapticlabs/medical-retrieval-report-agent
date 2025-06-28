@@ -32,8 +32,8 @@ class SharePointService:
         """Get Microsoft Graph API token with automatic refresh"""
         current_time = time.time()
         
-        # Check if token is still valid (with 5 minute buffer)
-        if self.token and current_time < (self.token_expires_at - 300):
+        # Check if token is still valid (with 2 minute buffer instead of 5)
+        if self.token and current_time < (self.token_expires_at - 120):
             return self.token
 
         logger.info("Acquiring new SharePoint token...")
@@ -58,7 +58,8 @@ class SharePointService:
         """Make HTTP request with automatic token refresh on 401 errors"""
         for attempt in range(max_retries):
             try:
-                # Get fresh token for each attempt
+                # Always refresh token before making request
+                self.refresh_token_if_needed()
                 headers["Authorization"] = f"Bearer {self._get_token()}"
                 
                 logger.debug(f"Making request to: {url} (attempt {attempt + 1})")
@@ -84,6 +85,9 @@ class SharePointService:
     def list_folder_contents(self, folder_path: str = "") -> List[Dict[str, Any]]:
         """List contents of a SharePoint folder"""
         try:
+            # Always refresh token before API call
+            self.refresh_token_if_needed()
+            
             headers = {
                 "Accept": "application/json"
             }
@@ -122,6 +126,9 @@ class SharePointService:
     def get_folder_metadata(self, folder_path: str) -> Dict[str, Any]:
         """Get metadata for a specific folder"""
         try:
+            # Always refresh token before API call
+            self.refresh_token_if_needed()
+            
             headers = {
                 "Accept": "application/json"
             }
@@ -150,9 +157,16 @@ class SharePointService:
         """Proactively refresh token if it's close to expiring"""
         current_time = time.time()
         
-        # Refresh if token expires in less than 10 minutes
-        if not self.token or current_time > (self.token_expires_at - 600):
+        # Refresh if token expires in less than 5 minutes (more aggressive)
+        if not self.token or current_time > (self.token_expires_at - 300):
             logger.info("Proactively refreshing SharePoint token...")
             self.token = None
             self.token_expires_at = 0
-            self._get_token() 
+            self._get_token()
+
+    def force_refresh_token(self):
+        """Force refresh the token regardless of expiration time"""
+        logger.info("Force refreshing SharePoint token...")
+        self.token = None
+        self.token_expires_at = 0
+        return self._get_token() 

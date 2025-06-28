@@ -48,6 +48,26 @@ def refresh_sharepoint_token():
         print(f"Error refreshing token: {e}")
         return False
 
+def force_refresh_sharepoint_token():
+    """Force refresh SharePoint token"""
+    print("\n=== Force Refreshing SharePoint Token ===")
+    
+    try:
+        response = requests.get(f"{BASE_URL}/api/force-refresh-sharepoint-token")
+        print(f"Response status: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            print(f"Force refresh result: {data}")
+            return True
+        else:
+            print(f"Error: {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"Error force refreshing token: {e}")
+        return False
+
 def test_folder_listing():
     """Test folder listing functionality"""
     print("\n=== Testing Folder Listing ===")
@@ -71,6 +91,25 @@ def test_folder_listing():
     except Exception as e:
         print(f"Error testing folder listing: {e}")
         return False
+
+def test_multiple_requests():
+    """Test multiple SharePoint requests to ensure token refresh works"""
+    print("\n=== Testing Multiple Requests ===")
+    
+    for i in range(5):
+        print(f"Request {i+1}/5:")
+        try:
+            response = requests.get(f"{BASE_URL}/api/test-sharepoint")
+            if response.status_code == 200:
+                data = response.json()
+                status = "✅" if data.get('status') == 'success' else "❌"
+                print(f"  {status} {data.get('message', 'Unknown')}")
+            else:
+                print(f"  ❌ HTTP {response.status_code}")
+        except Exception as e:
+            print(f"  ❌ Error: {e}")
+        
+        time.sleep(2)  # Wait 2 seconds between requests
 
 def monitor_sharepoint_health(duration_minutes=5):
     """Monitor SharePoint health for a period of time"""
@@ -113,6 +152,16 @@ if __name__ == "__main__":
                 print("❌ SharePoint still not working after token refresh")
         else:
             print("❌ Token refresh failed")
+    
+    # Test force refresh
+    print("\nTesting force refresh...")
+    if force_refresh_sharepoint_token():
+        print("✅ Force refresh successful")
+    else:
+        print("❌ Force refresh failed")
+    
+    # Test multiple requests
+    test_multiple_requests()
     
     # Test folder listing
     if test_folder_listing():
