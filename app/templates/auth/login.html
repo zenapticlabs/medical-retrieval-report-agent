@@ -80,22 +80,28 @@
         // Check if user is already logged in
         async function checkAuthStatus() {
             try {
+                console.log('Checking authentication status...');
                 const response = await fetch('/api/me', {
                     credentials: 'include'
                 });
                 
+                console.log('Auth check response status:', response.status);
+                
                 if (response.ok) {
                     const userData = await response.json();
+                    console.log('User data:', userData);
                     // User is already logged in, redirect to appropriate page
                     if (userData.is_admin) {
                         window.location.href = '/admin';
                     } else {
                         window.location.href = '/';
                     }
+                } else {
+                    console.log('Not authenticated, staying on login page');
                 }
             } catch (error) {
                 // User is not logged in, stay on login page
-                console.log('User not authenticated');
+                console.log('Authentication check error:', error);
             }
         }
 
@@ -143,6 +149,7 @@
             const password = document.getElementById('password').value;
 
             try {
+                console.log('Attempting login...');
                 const response = await fetch('/token', {
                     method: 'POST',
                     headers: {
@@ -155,13 +162,16 @@
                     credentials: 'include'
                 });
 
+                console.log('Login response status:', response.status);
                 const data = await response.json();
+                console.log('Login response data:', data);
 
                 if (response.ok) {
                     // Store token in localStorage for API calls
                     localStorage.setItem('token', data.access_token);
                     localStorage.setItem('user', JSON.stringify(data.user));
                     
+                    console.log('Login successful, redirecting...');
                     // Show success message
                     showAlert('Login successful! Redirecting...', 'success');
                     
@@ -174,10 +184,11 @@
                         }
                     }, 1000);
                 } else {
+                    console.log('Login failed:', data.detail);
                     showAlert(data.detail || 'Login failed. Please check your credentials.');
                 }
             } catch (error) {
-                console.error('Error:', error);
+                console.error('Login error:', error);
                 showAlert('An error occurred during login. Please try again.');
             } finally {
                 setLoading(false);

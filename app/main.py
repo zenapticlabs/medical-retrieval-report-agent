@@ -16,10 +16,7 @@ from app.db.database import get_db, engine
 from app.models.user import Base, User
 
 # Setup logging
-setup_logging()
-
-# Create database tables
-Base.metadata.create_all(bind=engine)
+logger = setup_logging()
 
 # Create FastAPI app
 app = FastAPI(
@@ -33,8 +30,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # In production, specify your frontend domain
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"]
 )
 
 # Mount static files
@@ -49,6 +47,31 @@ app.include_router(documents.router, prefix="/api", tags=["documents"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(folder_ingestion.router, prefix="/api", tags=["folder_ingestion"])
 
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database tables on startup"""
+    try:
+        logger.info("Initializing database tables...")
+        from app.db.database import init_db
+        init_db()
+        logger.info("Database initialization completed")
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+        logger.warning("Application will continue without database initialization")
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    try:
+        # Test database connection
+        db = next(get_db())
+        db.execute("SELECT 1")
+        db.close()
+        return {"status": "healthy", "database": "connected"}
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {"status": "unhealthy", "database": "disconnected", "error": str(e)}
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     """Serve the main search interface"""
@@ -58,6 +81,16 @@ async def index(request: Request):
 async def admin_dashboard(request: Request):
     """Serve the admin dashboard"""
     return templates.TemplateResponse("admin/dashboard.html", {"request": request})
+
+@app.get("/folders", response_class=HTMLResponse)
+async def folder_ingestion_page(request: Request):
+    """Serve the folder ingestion page"""
+    return templates.TemplateResponse("folder_ingestion.html", {"request": request})
+
+@app.get("/search", response_class=HTMLResponse)
+async def search_page(request: Request):
+    """Serve the search page"""
+    return templates.TemplateResponse("index.html", {"request": request})
 
 @app.post("/token")
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
@@ -101,9 +134,9 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
     response.set_cookie(
         key="access_token",
         value=access_token,
-        httponly=True,
+        httponly=False,  # Allow JavaScript access for better compatibility
         samesite="lax",
-        secure=False,  # Set to True if using HTTPS
+        secure=getattr(settings, 'ENVIRONMENT', 'development') == 'production',  # Only secure in production
         max_age=8 * 60 * 60,  # 8 hours in seconds
         path="/"
     )
@@ -131,6 +164,18 @@ async def logout():
 async def login_page(request: Request):
     """Serve the login page"""
     return templates.TemplateResponse("auth/login.html", {"request": request})
+
+@app.get("/api/test-auth")
+async def test_auth(current_user: User = Depends(get_current_user)):
+    """Test endpoint to verify authentication is working"""
+    return {
+        "message": "Authentication successful",
+        "user": {
+            "username": current_user.username,
+            "email": current_user.email,
+            "is_admin": current_user.is_admin
+        }
+    }
 
 if __name__ == "__main__":
     import uvicorn

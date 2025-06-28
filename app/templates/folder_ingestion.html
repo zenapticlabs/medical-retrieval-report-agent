@@ -124,30 +124,32 @@
         const pageSize = 10;
 
         // Function to handle logout
-        function logout() {
-            localStorage.removeItem('token');
-            window.location.href = '/login';
+        async function logout() {
+            try {
+                await fetch('/api/logout', {
+                    method: 'POST',
+                    credentials: 'include'
+                });
+            } catch (error) {
+                console.error('Logout error:', error);
+            } finally {
+                localStorage.removeItem('token');
+                localStorage.removeItem('user');
+                window.location.href = '/login';
+            }
         }
 
         // Function to fetch folder structure
         async function fetchFolderStructure(path = '') {
-            const token = localStorage.getItem('token');
-            if (!token) {
-                window.location.href = '/login';
-                return;
-            }
-
             try {
                 loadingSpinner.style.display = 'inline-block';
                 const response = await fetch(`/api/folders/list?path=${encodeURIComponent(path)}`, {
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
+                    credentials: 'include'
                 });
 
                 if (response.status === 401 || response.status === 403) {
                     window.location.href = '/login';
-                    return;
+                    return [];
                 }
 
                 const folders = await response.json();
@@ -216,19 +218,13 @@
                 return;
             }
 
-            const token = localStorage.getItem('token');
-            if (!token) {
-                window.location.href = '/login';
-                return;
-            }
-
             try {
                 const response = await fetch('/api/folders/ingest', {
                     method: 'POST',
                     headers: {
-                        'Authorization': `Bearer ${token}`,
                         'Content-Type': 'application/json'
                     },
+                    credentials: 'include',
                     body: JSON.stringify({ folder_path: selectedFolderPath })
                 });
 
@@ -257,17 +253,9 @@
 
         // Function to fetch ingestion history
         async function fetchIngestionHistory(page = 1) {
-            const token = localStorage.getItem('token');
-            if (!token) {
-                window.location.href = '/login';
-                return;
-            }
-
             try {
                 const response = await fetch(`/api/folders/ingestions?page=${page}&page_size=${pageSize}`, {
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
+                    credentials: 'include'
                 });
 
                 if (response.status === 401 || response.status === 403) {
@@ -333,17 +321,9 @@
 
         // Function to view ingestion details
         async function viewDetails(ingestionId) {
-            const token = localStorage.getItem('token');
-            if (!token) {
-                window.location.href = '/login';
-                return;
-            }
-
             try {
                 const response = await fetch(`/api/folders/ingestions/${ingestionId}`, {
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
+                    credentials: 'include'
                 });
 
                 if (response.status === 401 || response.status === 403) {
@@ -370,17 +350,9 @@
 
         // Function to download completed file
         async function downloadFile(ingestionId) {
-            const token = localStorage.getItem('token');
-            if (!token) {
-                window.location.href = '/login';
-                return;
-            }
-
             try {
                 const response = await fetch(`/api/folders/ingestions/${ingestionId}/download`, {
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
+                    credentials: 'include'
                 });
 
                 if (response.status === 401 || response.status === 403) {
