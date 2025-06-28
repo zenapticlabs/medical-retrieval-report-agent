@@ -6,6 +6,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import os
+import asyncio
 from datetime import datetime
 
 from app.api.routes import search, documents, admin, folder_ingestion
@@ -14,6 +15,7 @@ from app.core.logging import setup_logging
 from app.core.auth import create_access_token, get_current_user, verify_password
 from app.db.database import get_db, engine
 from app.models.user import Base, User
+from app.services.sharepoint_service import SharePointService
 
 # Setup logging
 logger = setup_logging()
@@ -47,6 +49,19 @@ app.include_router(documents.router, prefix="/api", tags=["documents"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(folder_ingestion.router, prefix="/api", tags=["folder_ingestion"])
 
+# Global SharePoint service instance
+sharepoint_service = SharePointService()
+
+async def refresh_sharepoint_token_periodically():
+    """Background task to refresh SharePoint token every 30 minutes"""
+    while True:
+        try:
+            await asyncio.sleep(1800)  # 30 minutes
+            sharepoint_service.refresh_token_if_needed()
+            logger.info("SharePoint token refreshed successfully")
+        except Exception as e:
+            logger.error(f"Error refreshing SharePoint token: {e}")
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize database tables on startup"""
@@ -55,6 +70,10 @@ async def startup_event():
         from app.db.database import init_db
         init_db()
         logger.info("Database initialization completed")
+        
+        # Start SharePoint token refresh task
+        asyncio.create_task(refresh_sharepoint_token_periodically())
+        logger.info("SharePoint token refresh task started")
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
         logger.warning("Application will continue without database initialization")
@@ -176,6 +195,37 @@ async def test_auth(current_user: User = Depends(get_current_user)):
             "is_admin": current_user.is_admin
         }
     }
+
+@app.get("/api/refresh-sharepoint-token")
+async def refresh_sharepoint_token():
+    """Manually refresh SharePoint token (for debugging)"""
+    try:
+        sharepoint_service.refresh_token_if_needed()
+        return {"message": "SharePoint token refreshed successfully"}
+    except Exception as e:
+        logger.error(f"Failed to refresh SharePoint token: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to refresh SharePoint token: {str(e)}"
+        )
+
+@app.get("/api/test-sharepoint")
+async def test_sharepoint_connection():
+    """Test SharePoint connection"""
+    try:
+        # Try to list root folder contents
+        items = sharepoint_service.list_folder_contents("")
+        return {
+            "status": "success",
+            "message": "SharePoint connection successful",
+            "items_count": len(items)
+        }
+    except Exception as e:
+        logger.error(f"SharePoint connection test failed: {e}")
+        return {
+            "status": "error",
+            "message": f"SharePoint connection failed: {str(e)}"
+        }
 
 if __name__ == "__main__":
     import uvicorn

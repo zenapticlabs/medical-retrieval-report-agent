@@ -264,7 +264,8 @@
 
                 if (!response.ok) {
                     if (response.status === 401 || response.status === 403) {
-                        window.location.href = '/login';
+                        // Don't redirect immediately, show error first
+                        showAlert('SharePoint authentication failed. Please try refreshing the page.', 'warning');
                         return [];
                     }
                     throw new Error('Failed to fetch folder structure');
