@@ -1,4 +1,3 @@
-
 # Medical Documents
 *.pdf
 **/*.pdf
@@ -220,3 +219,15 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Environment files
+.env
+.env.local
+.env.*.local
+env.json
+aws_microservices/env.json
+
+# Secrets and configuration
+*.secret
+*.key
+config/secrets.json

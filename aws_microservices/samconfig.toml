@@ -1,0 +1,12 @@
+version = 0.1
+[default.deploy.parameters]
+stack_name = "chronology-summaries"
+resolve_s3 = true
+s3_prefix = "chronology-summaries"
+region = "us-east-2"
+profile = "medical_local"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+disable_rollback = true
+parameter_overrides = "TenantId=\"89de9bdc-3988-40cd-9d10-ce36eba72d3a\" ClientId=\"22eb4926-5ed0-440c-ac16-ba2bd58d9683\" SiteId=\"50099bd1-0552-4a51-983e-6cf876da3a35\" S3Bucket=\"medical-chronology\""
+image_repositories = []

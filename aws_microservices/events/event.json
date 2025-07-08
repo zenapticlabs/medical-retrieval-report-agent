@@ -1,0 +1,44 @@
+{
+  "body": {
+    "path": "00_Complete/Adkisson, Patricia/Adkisson, Patricia_Proof Pages/",
+    "recursive": true,
+    "max_depth": 5
+  },
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "httpMethod": "POST",
+  "isBase64Encoded": false,
+  "multiValueHeaders": {},
+  "multiValueQueryStringParameters": {},
+  "path": "/list-files",
+  "pathParameters": {},
+  "queryStringParameters": {},
+  "requestContext": {
+    "accountId": "123456789012",
+    "apiId": "1234567890",
+    "httpMethod": "POST",
+    "path": "/list-files",
+    "stage": "Prod",
+    "requestId": "c6af9ac6-7b61-11e6-9a41-93e8deadbeef",
+    "requestTime": "09/Apr/2015:12:34:56 +0000",
+    "requestTimeEpoch": 1428582896000,
+    "identity": {
+      "cognitoIdentityPoolId": null,
+      "accountId": null,
+      "cognitoIdentityId": null,
+      "caller": null,
+      "accessKey": null,
+      "sourceIp": "127.0.0.1",
+      "cognitoAuthenticationType": null,
+      "cognitoAuthenticationProvider": null,
+      "userArn": null,
+      "userAgent": "Custom User Agent String",
+      "user": null
+    },
+    "resourceId": "123456",
+    "resourcePath": "/list-files"
+  },
+  "resource": "/list-files",
+  "stageVariables": {}
+} 

@@ -1,0 +1,94 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: SharePoint Medical Chronology Lambda Function
+
+Globals:
+  Function:
+    Timeout: 900  # 15 minutes (maximum allowed by AWS Lambda)
+    MemorySize: 3008  # 3008 MB is the max allowed by AWS Lambda
+    Runtime: python3.12
+
+Parameters:
+  TenantId:
+    Type: String
+    Default: ""
+    Description: Azure AD Tenant ID
+  
+  ClientId:
+    Type: String
+    Default: ""
+    Description: Azure AD Application Client ID
+  
+  ClientSecret:
+    Type: String
+    Default: ""
+    Description: Azure AD Application Client Secret
+    NoEcho: true
+  
+  SiteId:
+    Type: String
+    Default: ""
+    Description: SharePoint Site ID
+  
+  OpenAIApiKey:
+    Type: String
+    Default: ""
+    Description: OpenAI API Key
+    NoEcho: true
+  
+  S3Bucket:
+    Type: String
+    Default: "medical-chronology"
+    Description: S3 Bucket for storing chronology documents
+
+Resources:
+  SharePointChronologyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: sharepoint_file_list/
+      Handler: app.lambda_handler
+      Runtime: python3.12
+      Architectures:
+        - x86_64
+      Environment:
+        Variables:
+          TENANT_ID: !Ref TenantId
+          CLIENT_ID: !Ref ClientId
+          CLIENT_SECRET: !Ref ClientSecret
+          SITE_ID: !Ref SiteId
+          OPENAI_API_KEY: !Ref OpenAIApiKey
+          S3_BUCKET: !Ref S3Bucket
+      Policies:
+        - S3FullAccessPolicy:
+            BucketName: !Ref S3Bucket
+        - Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: 
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+      Events:
+        ChronologyApi:
+          Type: Api
+          Properties:
+            Path: /create-chronology
+            Method: post
+
+Outputs:
+  SharePointChronologyApi:
+    Description: "API Gateway endpoint URL for SharePoint Chronology function"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/create-chronology/"
+  
+  SharePointChronologyFunction:
+    Description: "SharePoint Chronology Lambda Function ARN"
+    Value: !GetAtt SharePointChronologyFunction.Arn
+  
+  MedicalChronologyBucket:
+    Description: "S3 Bucket for medical chronology documents"
+    Value: !Ref S3Bucket
+  
+  SharePointChronologyFunctionIamRole:
+    Description: "Implicit IAM Role created for SharePoint Chronology function"
+    Value: !GetAtt SharePointChronologyFunctionRole.Arn 

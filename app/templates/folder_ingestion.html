@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Folder Ingestion</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .folder-tree {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .folder-item {
+            cursor: pointer;
+            padding: 5px;
+            border-radius: 4px;
+        }
+        .folder-item:hover {
+            background-color: #f8f9fa;
+        }
+        .folder-item.selected {
+            background-color: #e9ecef;
+        }
+        .subfolder {
+            margin-left: 20px;
+        }
+        .folder-icon {
+            margin-right: 5px;
+        }
+        .loading-spinner {
+            display: none;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body class="bg-light">
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container">
+            <a class="navbar-brand" href="/">Medical Document System</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item">
+                        <a class="nav-link active" href="/folders">Folder Ingestion</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/search">Search</a>
+                    </li>
+                </ul>
+                <button class="btn btn-light" onclick="logout()">Logout</button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="row">
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="card-title mb-0">Select Folder</h5>
+                        <div class="spinner-border spinner-border-sm loading-spinner" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label class="form-label">Selected Folder:</label>
+                            <input type="text" class="form-control" id="selectedFolderPath" readonly>
+                        </div>
+                        <div class="folder-tree" id="folderTree">
+                            <!-- Will be populated by JavaScript -->
+                        </div>
+                        <button class="btn btn-primary mt-3" onclick="startIngestion()" id="startIngestionBtn" disabled>
+                            Start Ingestion
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">Ingestion History</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table">
+                                <thead>
+                                    <tr>
+                                        <th>Folder Path</th>
+                                        <th>Status</th>
+                                        <th>Date</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="ingestionHistory">
+                                    <!-- Will be populated by JavaScript -->
+                                </tbody>
+                            </table>
+                            <div class="d-flex justify-content-between align-items-center mt-3">
+                                <div>
+                                    Showing <span id="showingStart">0</span> to <span id="showingEnd">0</span> of <span id="totalItems">0</span> entries
+                                </div>
+                                <nav aria-label="Page navigation">
+                                    <ul class="pagination mb-0" id="pagination">
+                                        <!-- Will be populated by JavaScript -->
+                                    </ul>
+                                </nav>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let selectedFolderPath = '';
+        const loadingSpinner = document.querySelector('.loading-spinner');
+        let currentPage = 1;
+        const pageSize = 10;
+
+        // Function to handle logout
+        async function logout() {
+            try {
+                await fetch('/api/logout', {
+                    method: 'POST',
+                    credentials: 'include'
+                });
+            } catch (error) {
+                console.error('Logout error:', error);
+            } finally {
+                localStorage.removeItem('token');
+                localStorage.removeItem('user');
+                window.location.href = '/login';
+            }
+        }
+
+        // Function to fetch folder structure
+        async function fetchFolderStructure(path = '') {
+            try {
+                loadingSpinner.style.display = 'inline-block';
+                const response = await fetch(`/api/folders/list?path=${encodeURIComponent(path)}`, {
+                    credentials: 'include'
+                });
+
+                if (response.status === 401 || response.status === 403) {
+                    window.location.href = '/login';
+                    return [];
+                }
+
+                const folders = await response.json();
+                return folders;
+            } catch (error) {
+                console.error('Error fetching folder structure:', error);
+                return [];
+            } finally {
+                loadingSpinner.style.display = 'none';
+            }
+        }
+
+        // Function to create folder tree
+        async function createFolderTree(parentElement, path = '') {
+            const folders = await fetchFolderStructure(path);
+            
+            for (const folder of folders) {
+                const folderDiv = document.createElement('div');
+                folderDiv.className = 'folder-item';
+                
+                const folderPath = path ? `${path}/${folder.name}` : folder.name;
+                
+                folderDiv.innerHTML = `
+                    <i class="fas fa-folder folder-icon"></i>
+                    <span>${folder.name}</span>
+                    <i class="fas fa-chevron-right ms-2"></i>
+                `;
+                
+                folderDiv.onclick = async (e) => {
+                    e.stopPropagation();
+                    
+                    // Toggle selection
+                    document.querySelectorAll('.folder-item').forEach(item => {
+                        item.classList.remove('selected');
+                    });
+                    folderDiv.classList.add('selected');
+                    
+                    // Update selected folder path
+                    selectedFolderPath = folderPath;
+                    document.getElementById('selectedFolderPath').value = folderPath;
+                    document.getElementById('startIngestionBtn').disabled = false;
+                    
+                    // Toggle subfolder visibility
+                    const subfolderDiv = folderDiv.nextElementSibling;
+                    if (subfolderDiv && subfolderDiv.classList.contains('subfolder')) {
+                        subfolderDiv.style.display = subfolderDiv.style.display === 'none' ? 'block' : 'none';
+                        folderDiv.querySelector('.fa-chevron-right').style.transform = 
+                            subfolderDiv.style.display === 'none' ? 'rotate(0deg)' : 'rotate(90deg)';
+                    } else {
+                        // Create and load subfolders
+                        const subfolderDiv = document.createElement('div');
+                        subfolderDiv.className = 'subfolder';
+                        folderDiv.parentNode.insertBefore(subfolderDiv, folderDiv.nextSibling);
+                        await createFolderTree(subfolderDiv, folderPath);
+                    }
+                };
+                
+                parentElement.appendChild(folderDiv);
+            }
+        }
+
+        // Function to start folder ingestion
+        async function startIngestion() {
+            if (!selectedFolderPath) {
+                alert('Please select a folder first');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/folders/ingest', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    credentials: 'include',
+                    body: JSON.stringify({ folder_path: selectedFolderPath })
+                });
+
+                if (response.status === 401 || response.status === 403) {
+                    window.location.href = '/login';
+                    return;
+                }
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to start ingestion');
+                }
+
+                // Clear selection and refresh history
+                selectedFolderPath = '';
+                document.getElementById('selectedFolderPath').value = '';
+                document.getElementById('startIngestionBtn').disabled = true;
+                document.querySelectorAll('.folder-item').forEach(item => {
+                    item.classList.remove('selected');
+                });
+                fetchIngestionHistory();
+            } catch (error) {
+                alert(error.message);
+            }
+        }
+
+        // Function to fetch ingestion history
+        async function fetchIngestionHistory(page = 1) {
+            try {
+                const response = await fetch(`/api/folders/ingestions?page=${page}&page_size=${pageSize}`, {
+                    credentials: 'include'
+                });
+
+                if (response.status === 401 || response.status === 403) {
+                    window.location.href = '/login';
+                    return;
+                }
+
+                const data = await response.json();
+                const tbody = document.getElementById('ingestionHistory');
+                tbody.innerHTML = '';
+
+                // Update pagination info
+                document.getElementById('showingStart').textContent = ((page - 1) * pageSize) + 1;
+                document.getElementById('showingEnd').textContent = Math.min(page * pageSize, data.total);
+                document.getElementById('totalItems').textContent = data.total;
+
+                // Update table
+                data.items.forEach(ingestion => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${ingestion.folder_path}</td>
+                        <td>
+                            <span class="badge bg-${getStatusColor(ingestion.status)}">
+                                ${ingestion.status}
+                            </span>
+                        </td>
+                        <td>${new Date(ingestion.created_at).toLocaleString()}</td>
+                        <td>
+                            <button class="btn btn-sm btn-info me-2" onclick="viewDetails(${ingestion.id})">
+                                View Details
+                            </button>
+                            ${ingestion.status === 'COMPLETED' && ingestion.download_url ? 
+                                `<button class="btn btn-sm btn-success" onclick="downloadFile(${ingestion.id})">
+                                    <i class="fas fa-download"></i> Download
+                                </button>` : 
+                                ''
+                            }
+                        </td>
+                    `;
+                    tbody.appendChild(row);
+                });
+
+                // Update pagination controls
+                updatePagination(data.page, data.total_pages);
+            } catch (error) {
+                console.error('Error fetching ingestion history:', error);
+            }
+        }
+
+        // Helper function to get status color
+        function getStatusColor(status) {
+            switch (status.toUpperCase()) {
+                case 'COMPLETED':
+                    return 'success';
+                case 'PROCESSING':
+                    return 'primary';
+                case 'FAILED':
+                    return 'danger';
+                default:
+                    return 'secondary';
+            }
+        }
+
+        // Function to view ingestion details
+        async function viewDetails(ingestionId) {
+            try {
+                const response = await fetch(`/api/folders/ingestions/${ingestionId}`, {
+                    credentials: 'include'
+                });
+
+                if (response.status === 401 || response.status === 403) {
+                    window.location.href = '/login';
+                    return;
+                }
+
+                const ingestion = await response.json();
+                
+                // Create a more user-friendly details display
+                const details = `
+                    Folder Path: ${ingestion.folder_path}
+                    Status: ${ingestion.status}
+                    Created: ${new Date(ingestion.created_at).toLocaleString()}
+                    ${ingestion.processed_files_count ? `Files Processed: ${ingestion.processed_files_count}` : ''}
+                    ${ingestion.error_message ? `Error: ${ingestion.error_message}` : ''}
+                `;
+                alert(details);
+            } catch (error) {
+                console.error('Error fetching ingestion details:', error);
+                alert('Error fetching details');
+            }
+        }
+
+        // Function to download completed file
+        async function downloadFile(ingestionId) {
+            try {
+                const response = await fetch(`/api/folders/ingestions/${ingestionId}/download`, {
+                    credentials: 'include'
+                });
+
+                if (response.status === 401 || response.status === 403) {
+                    window.location.href = '/login';
+                    return;
+                }
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to get download URL');
+                }
+
+                const data = await response.json();
+                
+                // Open download URL in new tab
+                window.open(data.download_url, '_blank');
+            } catch (error) {
+                console.error('Error downloading file:', error);
+                alert(error.message || 'Error downloading file');
+            }
+        }
+
+        // Function to update pagination controls
+        function updatePagination(currentPage, totalPages) {
+            const pagination = document.getElementById('pagination');
+            pagination.innerHTML = '';
+
+            // Previous button
+            const prevLi = document.createElement('li');
+            prevLi.className = `page-item ${currentPage === 1 ? 'disabled' : ''}`;
+            prevLi.innerHTML = `
+                <a class="page-link" href="#" onclick="return false;" data-page="${currentPage - 1}">
+                    Previous
+                </a>
+            `;
+            pagination.appendChild(prevLi);
+
+            // Page numbers
+            for (let i = 1; i <= totalPages; i++) {
+                if (
+                    i === 1 || // First page
+                    i === totalPages || // Last page
+                    (i >= currentPage - 2 && i <= currentPage + 2) // Pages around current
+                ) {
+                    const li = document.createElement('li');
+                    li.className = `page-item ${i === currentPage ? 'active' : ''}`;
+                    li.innerHTML = `
+                        <a class="page-link" href="#" onclick="return false;" data-page="${i}">
+                            ${i}
+                        </a>
+                    `;
+                    pagination.appendChild(li);
+                } else if (
+                    i === currentPage - 3 || // Before current page range
+                    i === currentPage + 3 // After current page range
+                ) {
+                    const li = document.createElement('li');
+                    li.className = 'page-item disabled';
+                    li.innerHTML = '<span class="page-link">...</span>';
+                    pagination.appendChild(li);
+                }
+            }
+
+            // Next button
+            const nextLi = document.createElement('li');
+            nextLi.className = `page-item ${currentPage === totalPages ? 'disabled' : ''}`;
+            nextLi.innerHTML = `
+                <a class="page-link" href="#" onclick="return false;" data-page="${currentPage + 1}">
+                    Next
+                </a>
+            `;
+            pagination.appendChild(nextLi);
+
+            // Add click handlers
+            pagination.querySelectorAll('.page-link').forEach(link => {
+                link.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    const page = parseInt(link.dataset.page);
+                    if (!isNaN(page) && page > 0 && page <= totalPages) {
+                        fetchIngestionHistory(page);
+                    }
+                });
+            });
+        }
+
+        // Initialize folder tree and fetch history when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            createFolderTree(document.getElementById('folderTree'));
+            fetchIngestionHistory();
+        });
+    </script>
+</body>
+</html> 
