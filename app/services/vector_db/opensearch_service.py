@@ -181,7 +181,7 @@ class OpenSearchService(VectorDBService):
                         }
                     },
                     "_source": {
-                        "includes": ["document_name", "page_number", "content"]
+                        "includes": ["document_type", "content", "chunk_text", "chunk_index", "file_type", "keywords", "medical_terms"]
                     }
                 }
             )
@@ -209,12 +209,24 @@ class OpenSearchService(VectorDBService):
             for hit in hits:
                 try:
                     source = hit.get('_source', {})
+                    
+                    # Extract data from your actual index structure
+                    content = source.get("content") or source.get("chunk_text", "")
+                    document_name = source.get("document_type", "Unknown Document")
+                    chunk_index = source.get("chunk_index", 0)
+                    file_type = source.get("file_type", "")
+                    keywords = source.get("keywords", [])
+                    medical_terms = source.get("medical_terms", [])
+                    
                     result = {
                         "document_id": hit.get('_id', ''),
-                        "document_name": source.get("document_name", ""),
-                        "page_number": source.get("page_number", 0),
-                        "content": source.get("content", ""),
-                        "score": hit.get('_score', 0.0)
+                        "document_name": document_name,
+                        "page_number": chunk_index,  # Using chunk_index as page_number
+                        "content": content,
+                        "score": hit.get('_score', 0.0),
+                        "file_type": file_type,
+                        "keywords": keywords,
+                        "medical_terms": medical_terms
                     }
                     results.append(result)
                     logger.debug(f"Processed hit: doc_id={result['document_id']}, score={result['score']}")
