@@ -34,7 +34,7 @@ class OpenSearchService(VectorDBService):
                 region_name=self.region
             )
             credentials = session.get_credentials()
-            aws_auth = AWSV4SignerAuth(credentials, self.region, 'aoss')
+            aws_auth = AWSV4SignerAuth(credentials, self.region, 'es')
 
             # Remove https:// from endpoint if present
             host = self.endpoint.replace("https://", "")
