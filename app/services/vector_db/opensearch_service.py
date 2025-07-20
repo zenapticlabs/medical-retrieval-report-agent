@@ -161,7 +161,7 @@ class OpenSearchService(VectorDBService):
         except Exception as e:
             logger.error(f"Error indexing document: {str(e)}")
             return False
-
+    
     def search(self, query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
         """Search for similar documents using vector similarity"""
         try:
