@@ -117,18 +117,25 @@ async def search(query: SearchQuery) -> Dict[str, Any]:
     try:
         logger.info(f"Processing search query: {query.query}")
 
-        #FIXED: Convert text query to vector embedding first
+        # FIXED: Convert text query to vector embedding first
         query_vector = processor.get_embedding(query.query)
 
-        logger.info(f"Embeddings of user query, {query_vector}")
+        # Enhanced logging for debugging
+        logger.info(f"Raw embedding type: {type(query_vector)}")
+        logger.info(f"Raw embedding shape: {query_vector.shape if hasattr(query_vector, 'shape') else 'No shape attribute'}")
+        logger.info(f"Raw embedding dimension: {len(query_vector)}")
+        logger.info(f"First 5 values: {query_vector[:5]}")
 
         if hasattr(query_vector, 'tolist'):
             query_vector = query_vector.tolist()
         elif not isinstance(query_vector, list):
             query_vector = list(query_vector)
-        
-        logger.info(f"Generated query vector with dimension: {len(query_vector)}")
 
+        logger.info(f"Final query vector dimension: {len(query_vector)}")
+        logger.info(f"Final query vector type: {type(query_vector)}")
+
+        return
+    
         raw_results = processor.search(query_vector, top_k=query.top_k)
 
         # Transform using the function from the previous artifact
