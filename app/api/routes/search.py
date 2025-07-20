@@ -147,3 +147,39 @@ async def search(query: SearchQuery) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error processing search: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e)) 
+    
+@router.get("/search/debug-semantic")
+async def debug_semantic_search(query: str = "heart attack") -> Dict[str, Any]:
+    """Debug semantic search functionality"""
+    try:
+        if hasattr(processor.vector_db, 'debug_vector_search'):
+            debug_results = processor.vector_db.debug_vector_search(query)
+        else:
+            debug_results = {"error": "Debug method not available"}
+        
+        return {
+            "debug_results": debug_results,
+            "recommendations": [
+                "Check if documents have embeddings in the 'embedding' field",
+                "Verify k-NN query is using correct field name",
+                "Test with medical synonyms to verify semantic matching",
+                "Check if BioLORD model is generating meaningful embeddings"
+            ]
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
+
+@router.get("/search/test-similarity")
+async def test_similarity(text1: str = "heart attack", text2: str = "myocardial infarction") -> Dict[str, Any]:
+    """Test semantic similarity between two texts"""
+    try:
+        if hasattr(processor.vector_db, 'test_embedding_similarity'):
+            similarity_results = processor.vector_db.test_embedding_similarity(text1, text2)
+        else:
+            similarity_results = {"error": "Similarity test method not available"}
+        
+        return similarity_results
+        
+    except Exception as e:
+        return {"error": str(e)}
