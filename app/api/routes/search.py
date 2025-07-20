@@ -131,7 +131,19 @@ async def search(query: SearchQuery) -> Dict[str, Any]:
 
         raw_results = processor.search(query_vector, top_k=query.top_k)
 
-        return transform_search_results_for_ui(raw_results, query.query)
+        # Transform using the function from the previous artifact
+        ui_results = transform_search_results_for_ui(raw_results, query.query)
+        total_chunks = sum(len(doc_data["chunks"]) for doc_data in ui_results.values())
+        
+        return {
+            "results": ui_results,
+            "query": query.query,
+            "vector_dimension": len(query_vector),
+            "total_results": total_chunks,
+            "total_documents": len(ui_results)
+        }
+
+        #return transform_search_results_for_ui(raw_results, query.query)
     except Exception as e:
         logger.error(f"Error processing search: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e)) 
