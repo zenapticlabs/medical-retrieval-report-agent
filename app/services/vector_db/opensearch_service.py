@@ -162,14 +162,14 @@ class OpenSearchService(VectorDBService):
             logger.error(f"Error indexing document: {str(e)}")
             return False
 
-    def search(self, index_name: str, query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
+    def search(self, query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
         """Search for similar documents using vector similarity"""
         try:
             # Ensure index exists before searching
             self._ensure_index()
             
             response = self.client.search(
-                index=index_name,
+                index=self.index_name,
                 body={
                     "size": top_k,
                     "query": {
@@ -179,23 +179,70 @@ class OpenSearchService(VectorDBService):
                                 "k": top_k
                             }
                         }
+                    },
+                    "_source": {
+                        "includes": ["document_name", "page_number", "content"]
                     }
                 }
             )
-            
-            # Format response to match Elasticsearch format
-            results = []
-            for hit in response['hits']['hits']:
-                results.append({
-                    'id': hit['_id'],
-                    'score': hit['_score'],
-                    'source': hit['_source']
-                })
-            return results
-        except Exception as e:
-            logger.error(f"Error performing search: {str(e)}")
-            return []
 
+
+            logger.debug(f"OpenSearch response status: {response.get('timed_out', False)}")
+
+            # Check if we got valid results
+            if 'hits' not in response or 'hits' not in response['hits']:
+                logger.warning("No hits found in OpenSearch response")
+                return []
+            
+            # Format response to match expected structure
+            results = []
+            hits = response['hits']['hits']
+            total_hits = response['hits'].get('total', {})
+            
+            if isinstance(total_hits, dict):
+                total_count = total_hits.get('value', 0)
+            else:
+                total_count = total_hits
+                
+            logger.info(f"OpenSearch found {total_count} total matches, returning top {len(hits)} results")
+            
+            for hit in hits:
+                try:
+                    source = hit.get('_source', {})
+                    result = {
+                        "document_id": hit.get('_id', ''),
+                        "document_name": source.get("document_name", ""),
+                        "page_number": source.get("page_number", 0),
+                        "content": source.get("content", ""),
+                        "score": hit.get('_score', 0.0)
+                    }
+                    results.append(result)
+                    logger.debug(f"Processed hit: doc_id={result['document_id']}, score={result['score']}")
+                except Exception as hit_error:
+                    logger.error(f"Error processing search hit: {str(hit_error)}")
+                    continue
+            
+            logger.info(f"Search completed successfully. Returning {len(results)} results")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error performing OpenSearch k-NN search: {str(e)}")
+            logger.error(f"Query vector length: {len(query_vector) if isinstance(query_vector, list) else 'not a list'}")
+            logger.error(f"Expected vector dimension: {self.vector_dimension}")
+            logger.error(f"Index name: {self.index_name}")
+            
+            # Try to provide more debugging info
+            try:
+                if self.client and self.client.indices.exists(index=self.index_name):
+                    mapping = self.client.indices.get_mapping(index=self.index_name)
+                    logger.error(f"Index mapping: {mapping}")
+                else:
+                    logger.error("Index does not exist or client is not initialized")
+            except Exception as debug_error:
+                logger.error(f"Could not get debug info: {str(debug_error)}")
+                
+            return []
+        
     def list_documents(self, index_name: str) -> List[Dict[str, Any]]:
         """List all documents in the index"""
         try:
