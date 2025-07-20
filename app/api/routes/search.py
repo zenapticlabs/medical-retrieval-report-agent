@@ -24,7 +24,21 @@ async def search(query: SearchQuery) -> Dict[str, Any]:
     """
     try:
         logger.info(f"Processing search query: {query.query}")
-        results = processor.search(query.query, top_k=query.top_k)
+
+        #FIXED: Convert text query to vector embedding first
+        query_vector = processor.get_embedding(query.query)
+
+        logger.info(f"Embeddings of user query, {query_vector}")
+
+        if hasattr(query_vector, 'tolist'):
+            query_vector = query_vector.tolist()
+        elif not isinstance(query_vector, list):
+            query_vector = list(query_vector)
+        
+        logger.info(f"Generated query vector with dimension: {len(query_vector)}")
+
+        results = processor.search(query_vector, top_k=query.top_k)
+
         return {"results": results}
     except Exception as e:
         logger.error(f"Error processing search: {str(e)}")
