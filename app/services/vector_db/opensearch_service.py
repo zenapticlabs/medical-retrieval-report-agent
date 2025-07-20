@@ -53,6 +53,198 @@ class OpenSearchService(VectorDBService):
             logger.error(f"Error connecting to OpenSearch: {str(e)}")
             raise
 
+
+    ## TEST BLOCK START
+    def debug_vector_search(self, query_text: str, top_k: int = 5) -> Dict[str, Any]:
+        """Debug semantic search functionality"""
+        try:
+            logger.info(f"=== DEBUGGING SEMANTIC SEARCH FOR: '{query_text}' ===")
+            
+            # Step 1: Check if we can generate embeddings for the query
+            from app.services.document_processor import DocumentProcessor
+            processor = DocumentProcessor()
+            
+            logger.info("Step 1: Generating query embedding...")
+            query_vector = processor.get_embedding(query_text)
+            
+            if hasattr(query_vector, 'tolist'):
+                query_vector = query_vector.tolist()
+            elif not isinstance(query_vector, list):
+                query_vector = list(query_vector)
+                
+            logger.info(f"Query vector dimension: {len(query_vector)}")
+            logger.info(f"Query vector sample (first 5 values): {query_vector[:5]}")
+            
+            # Step 2: Check if documents have embeddings
+            logger.info("Step 2: Checking if documents have embeddings...")
+            sample_query = {
+                "size": 3,
+                "query": {"match_all": {}},
+                "_source": ["document_name", "embedding", "content"]
+            }
+            
+            response = self.client.search(index=self.index_name, body=sample_query)
+            
+            docs_with_embeddings = 0
+            docs_without_embeddings = 0
+            
+            for hit in response.get('hits', {}).get('hits', []):
+                source = hit['_source']
+                if 'embedding' in source and source['embedding']:
+                    docs_with_embeddings += 1
+                    embedding_dim = len(source['embedding']) if isinstance(source['embedding'], list) else 0
+                    logger.info(f"Document '{source.get('document_name', 'Unknown')}' has embedding with dimension: {embedding_dim}")
+                else:
+                    docs_without_embeddings += 1
+                    logger.warning(f"Document '{source.get('document_name', 'Unknown')}' has NO embedding!")
+            
+            logger.info(f"Documents WITH embeddings: {docs_with_embeddings}")
+            logger.info(f"Documents WITHOUT embeddings: {docs_without_embeddings}")
+            
+            # Step 3: Test the k-NN search directly
+            logger.info("Step 3: Testing k-NN search...")
+            
+            # First try with a very broad search to see if k-NN works at all
+            knn_query = {
+                "size": top_k,
+                "query": {
+                    "knn": {
+                        "embedding": {
+                            "vector": query_vector,
+                            "k": top_k * 2  # Get more results to see variety
+                        }
+                    }
+                },
+                "_source": ["document_name", "content", "keywords", "medical_terms"]
+            }
+            
+            logger.info(f"k-NN query: {knn_query}")
+            
+            knn_response = self.client.search(index=self.index_name, body=knn_query)
+            
+            knn_results = []
+            for hit in knn_response.get('hits', {}).get('hits', []):
+                source = hit['_source']
+                score = hit['_score']
+                content = source.get('content', '')
+                
+                # Check if this is actually semantic (no exact keyword matches)
+                content_lower = content.lower()
+                query_words = query_text.lower().split()
+                has_exact_match = any(word in content_lower for word in query_words if len(word) > 2)
+                
+                result = {
+                    "document_name": source.get('document_name', ''),
+                    "score": score,
+                    "content_preview": content[:200] + "..." if len(content) > 200 else content,
+                    "has_exact_keyword_match": has_exact_match,
+                    "is_semantic_match": not has_exact_match
+                }
+                knn_results.append(result)
+                
+                logger.info(f"Result: {result['document_name']}, Score: {score:.4f}, Semantic: {result['is_semantic_match']}")
+            
+            # Step 4: Try a completely different semantic query
+            logger.info("Step 4: Testing with a semantic-only query...")
+            
+            # Use synonyms or related medical terms that won't have exact matches
+            semantic_test_queries = [
+                "cardiac arrest",  # if original was "heart attack"
+                "hypertension",    # if original was "high blood pressure" 
+                "myocardial infarction",  # if original was "heart attack"
+                "cerebrovascular accident"  # if original was "stroke"
+            ]
+            
+            semantic_results = {}
+            for test_query in semantic_test_queries:
+                if test_query.lower() != query_text.lower():
+                    logger.info(f"Testing semantic query: '{test_query}'")
+                    test_vector = processor.get_embedding(test_query)
+                    if hasattr(test_vector, 'tolist'):
+                        test_vector = test_vector.tolist()
+                    
+                    test_response = self.client.search(
+                        index=self.index_name,
+                        body={
+                            "size": 3,
+                            "query": {
+                                "knn": {
+                                    "embedding": {
+                                        "vector": test_vector,
+                                        "k": 3
+                                    }
+                                }
+                            },
+                            "_source": ["document_name", "content"]
+                        }
+                    )
+                    
+                    semantic_results[test_query] = len(test_response.get('hits', {}).get('hits', []))
+                    logger.info(f"'{test_query}' returned {semantic_results[test_query]} results")
+            
+            return {
+                "query": query_text,
+                "query_vector_dimension": len(query_vector),
+                "index_stats": {
+                    "docs_with_embeddings": docs_with_embeddings,
+                    "docs_without_embeddings": docs_without_embeddings
+                },
+                "knn_results": knn_results,
+                "semantic_test_results": semantic_results,
+                "total_knn_hits": len(knn_results),
+                "purely_semantic_hits": len([r for r in knn_results if r["is_semantic_match"]])
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in debug_vector_search: {str(e)}")
+            return {"error": str(e)}
+
+    def test_embedding_similarity(self, text1: str, text2: str) -> Dict[str, Any]:
+        """Test if embedding model can detect semantic similarity between two texts"""
+        try:
+            from app.services.document_processor import DocumentProcessor
+            import numpy as np
+            
+            processor = DocumentProcessor()
+            
+            # Generate embeddings for both texts
+            emb1 = processor.get_embedding(text1)
+            emb2 = processor.get_embedding(text2)
+            
+            if hasattr(emb1, 'tolist'):
+                emb1 = emb1.tolist()
+            if hasattr(emb2, 'tolist'):
+                emb2 = emb2.tolist()
+            
+            # Calculate cosine similarity
+            emb1_np = np.array(emb1)
+            emb2_np = np.array(emb2)
+            
+            dot_product = np.dot(emb1_np, emb2_np)
+            norm1 = np.linalg.norm(emb1_np)
+            norm2 = np.linalg.norm(emb2_np)
+            
+            cosine_similarity = dot_product / (norm1 * norm2)
+            
+            return {
+                "text1": text1,
+                "text2": text2,
+                "cosine_similarity": float(cosine_similarity),
+                "embedding_dimension": len(emb1),
+                "similarity_interpretation": {
+                    "very_similar": cosine_similarity > 0.8,
+                    "similar": cosine_similarity > 0.6,
+                    "somewhat_similar": cosine_similarity > 0.4,
+                    "different": cosine_similarity <= 0.4
+                }
+            }
+            
+        except Exception as e:
+            return {"error": str(e)}
+    
+    ### TEST BLOCK ENDS
+
+
     def _ensure_index(self, max_retries: int = 3) -> None:
         """Ensure the index exists, with retry logic"""
         for attempt in range(max_retries):
@@ -161,7 +353,7 @@ class OpenSearchService(VectorDBService):
         except Exception as e:
             logger.error(f"Error indexing document: {str(e)}")
             return False
-    
+
     def search(self, query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
         """Search for similar documents using vector similarity"""
         try:
