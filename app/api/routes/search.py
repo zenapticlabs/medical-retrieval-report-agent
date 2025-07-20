@@ -20,7 +20,7 @@ class SearchQuery(BaseModel):
 
 
 
-def transform_search_results_for_ui(self, raw_results: List[Dict[str, Any]], query: str) -> Dict[str, Any]:
+def transform_search_results_for_ui(raw_results: List[Dict[str, Any]], query: str) -> Dict[str, Any]:
     """Transform OpenSearch raw results into UI-compatible format"""
     from collections import defaultdict
     import re
