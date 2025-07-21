@@ -134,7 +134,6 @@ async def search(query: SearchQuery) -> Dict[str, Any]:
         logger.info(f"Final query vector dimension: {len(query_vector)}")
         logger.info(f"Final query vector type: {type(query_vector)}")
 
-        return
     
         raw_results = processor.search(query_vector, top_k=query.top_k)
 
@@ -144,6 +143,7 @@ async def search(query: SearchQuery) -> Dict[str, Any]:
         
         return {
             "results": ui_results,
+            "raw_results": raw_results,
             "query": query.query,
             "vector_dimension": len(query_vector),
             "total_results": total_chunks,
