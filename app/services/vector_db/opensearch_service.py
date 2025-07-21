@@ -373,7 +373,7 @@ class OpenSearchService(VectorDBService):
                         }
                     },
                     "_source": {
-                        "includes": ["document_type", "content", "chunk_text", "chunk_index", "file_type", "keywords", "medical_terms"]
+                        "includes": ["title", "file_name", "content", "chunk_text", "chunk_index", "file_type", "keywords", "medical_terms"]
                     }
                 }
             )
@@ -404,7 +404,7 @@ class OpenSearchService(VectorDBService):
                     
                     # Extract data from your actual index structure
                     content = source.get("content") or source.get("chunk_text", "")
-                    document_name = source.get("document_type", "Unknown Document")
+                    document_name = source.get("file_name", "Unknown Document")
                     chunk_index = source.get("chunk_index", 0)
                     file_type = source.get("file_type", "")
                     keywords = source.get("keywords", [])
