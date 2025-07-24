@@ -117,11 +117,12 @@ The function requires these environment variables:
 ### Setting Up Local Environment
 
 1. Copy the sample environment file:
+
    ```bash
    cp env.json.sample env.json
    ```
-
 2. Edit `env.json` with your actual values:
+
    ```json
    {
      "SharePointChronologyFunction": {
@@ -243,3 +244,14 @@ This will process files from:
 `Document Summary Project/00_Complete/Adkisson, Patricia/Adkisson, Patricia_Proof Pages`
 
 And create a chronology document uploaded to S3.
+
+
+ 1630  cd aws_microservices && sam build --use-container
+ 1631  sam local invoke SharePointChronologyFunction --event events/test_mock_chronology.json --env-vars env.json --profile medical_local
+ 1632  python3 test_document_creation.py
+ 1633  sam deploy --profile medical_local
+ 1634  sam build --use-container
+ 1635  sam deploy --profile medical_local
+ 1636  sam build --use_container
+ 1637  sam build --use-container
+ 1638  sam deploy --profile medical_local

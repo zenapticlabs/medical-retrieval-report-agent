@@ -27,7 +27,7 @@ CLIENT_ID = os.environ.get('CLIENT_ID')
 CLIENT_SECRET = os.environ.get('CLIENT_SECRET')
 SITE_ID = os.environ.get('SITE_ID')
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
-GEMINI_API_KEY = "AIzaSyDmYaWkrqGaaH6ZEldo3OLQFNuD4UAmQLg"
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 S3_BUCKET = os.environ.get('S3_BUCKET', 'medical-chronology')
 
 # Initialize S3 client
@@ -433,29 +433,29 @@ def batch_files(files_data, max_tokens_per_batch=120000, model="gpt-4o"):
 
     return batches
 
-def process_batch(batch, batch_index):
-    files_content = ""
-    for i, file_data in enumerate(batch, 1):
-        file_name = file_data['name']
-        page_number = file_data.get('page_number', 1)
-        batch_info = extract_batch_info(file_name)
-        files_content += f"\n\n--- FILE {i}: {file_name} ({batch_info}) PAGE {page_number} ---\n"
-        files_content += f"File Path: {file_data.get('path', 'N/A')}\n"
-        files_content += f"Content:\n{file_data['content']}"
+# def process_batch(batch, batch_index):
+#     files_content = ""
+#     for i, file_data in enumerate(batch, 1):
+#         file_name = file_data['name']
+#         page_number = file_data.get('page_number', 1)
+#         batch_info = extract_batch_info(file_name)
+#         files_content += f"\n\n--- FILE {i}: {file_name} ({batch_info}) PAGE {page_number} ---\n"
+#         files_content += f"File Path: {file_data.get('path', 'N/A')}\n"
+#         files_content += f"Content:\n{file_data['content']}"
 
-    import openai
-    openai.api_key = OPENAI_API_KEY
-    response = openai.ChatCompletion.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": MASTER_PROMPT},
-            {"role": "user", "content": f"Please analyze these medical files and create a chronology summary. Use the actual file names provided for Bates number references:\n{files_content}"}
-        ],
-        max_tokens=4000,
-        temperature=0.1
-    )
-    response_content = response['choices'][0]['message']['content']
-    return response_content
+#     import openai
+#     openai.api_key = OPENAI_API_KEY
+#     response = openai.ChatCompletion.create(
+#         model="gpt-4o",
+#         messages=[
+#             {"role": "system", "content": MASTER_PROMPT},
+#             {"role": "user", "content": f"Please analyze these medical files and create a chronology summary. Use the actual file names provided for Bates number references:\n{files_content}"}
+#         ],
+#         max_tokens=4000,
+#         temperature=0.1
+#     )
+#     response_content = response['choices'][0]['message']['content']
+#     return response_content
 
 def process_files_with_gemini(files_data: list, use_mock: bool = False) -> dict:
     """Process file contents with Google Gemini 1.5 Pro to create medical chronology"""
