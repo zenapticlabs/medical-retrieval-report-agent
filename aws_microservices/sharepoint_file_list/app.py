@@ -12,6 +12,10 @@ from io import BytesIO
 import PyPDF2
 from docx import Document
 import re
+import concurrent.futures
+import tiktoken
+import time
+import google.generativeai as genai
 
 # Set up logging
 logger = logging.getLogger()
@@ -23,6 +27,7 @@ CLIENT_ID = os.environ.get('CLIENT_ID')
 CLIENT_SECRET = os.environ.get('CLIENT_SECRET')
 SITE_ID = os.environ.get('SITE_ID')
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+GEMINI_API_KEY = "AIzaSyDmYaWkrqGaaH6ZEldo3OLQFNuD4UAmQLg"
 S3_BUCKET = os.environ.get('S3_BUCKET', 'medical-chronology')
 
 # Initialize S3 client
@@ -43,7 +48,8 @@ Governing rules:
   * Examples: "Adkisson_Patricia_2019.10.31_PMH_UIH_178_p1", "PathologyReport_UCM_321_p2"
   * For date-based batches like "2019.10.31_178", format as: "FileName_DATE_2019.10.31_178_p1"
   * For ranges like "UIH_178-185", use the specific batch number for the page: "FileName_UIH_178_p1", "FileName_UIH_179_p1", etc.
-  * If no page numbers are available, use the file name with batch number: "MedicalRecords_UIH_178-185"
+  * ALWAYS include the page number in every reference (e.g., ..._p1, ..._p2, etc.), even for single-page files
+  * For the Word document output, use the format: "DOCUMENT_NAME-Page X" (e.g., "Adkisson Patricia 2019.10.31 PMH UIH 178-Page 1")
 - Abbreviations – expand the first mention (e.g., "CT (computed tomography)") then abbreviate thereafter.
 - Objectivity – copy pertinent findings verbatim or paraphrase neutrally; avoid diagnostic speculation.
 
@@ -93,6 +99,18 @@ Required sections to extract and organize:
    - Include detailed description of record types (e.g., "Oncology visits, pathology reports, radiology studies, lab results")
    - Group by facility and provide comprehensive coverage of all reviewed records
 
+5. QUALIFYING DIAGNOSIS TABLE:
+  - For each qualifying cancer or catastrophic diagnosis, create a separate row with these columns:
+    * Diagnosis: (concise summary, e.g., “High-grade serous carcinoma, tubo-ovarian, FIGO IIIB” — do NOT include full pathology text or all details, just the main diagnosis and stage)
+    * Dx Reference: (file and page or Bates reference where diagnosis appears)
+    * Treatment: (treatments given, with dates, in concise bullet or list format)
+    * Tx Reference: (file and page or Bates reference where treatment evidence appears)
+  - Only include diagnoses that are serious, life-threatening, or may qualify for litigation/insurance/benefits (e.g., any cancer diagnosis with pathologic/clinical proof, or catastrophic injury).
+  - Be precise and specific. Each reference must point directly to the page or Bates number where the diagnosis or treatment is proven.
+  - If multiple sources exist for Dx/Tx, list all significant references.
+  - Format as a JSON array under "qualifying_diagnosis_table".
+  - The “diagnosis” field should be brief and clinically focused (1-2 lines), not a full pathology report or list of all findings.
+
 IMPORTANT: Be extremely thorough in extracting information. Each chronological entry should be comprehensive and detailed, not just 2-3 words. Include all relevant medical findings, test results, treatments, and clinical observations from the source documents. Always reference the actual file names with properly formatted batch numbers in Bates references.
 
 Please analyze all the provided medical files and return a structured JSON response with the following format:
@@ -132,7 +150,15 @@ Please analyze all the provided medical files and return a structured JSON respo
   ],
   "record_index": [
     {"facility": "", "bates_range": "ActualFileName_ProperlyFormattedBatchNumber_StartPage-EndPage", "date_range": "", "description": "DETAILED DESCRIPTION OF RECORD TYPES AND CONTENT"}
-  ]
+  ],
+  "qualifying_diagnosis_table": [
+    {
+      "diagnosis": "",
+      "dx_reference": "",
+      "treatment": "",
+      "tx_reference": ""
+    }
+  ],
 }
 
 Begin comprehensive analysis of the provided medical files now. Extract ALL available medical information and create detailed, thorough entries using actual file names with properly formatted batch numbers for Bates references."""
@@ -248,40 +274,44 @@ def walk_sharepoint_path(path: str, token: str, max_depth: int = 5, current_dept
     
     return result
 
-def download_file_content(download_url: str, file_name: str) -> str:
-    """Download and extract text content from SharePoint file"""
+def download_file_content(download_url: str, file_name: str) -> list:
+    """Download and extract text content from SharePoint file, paginated by page_number."""
     try:
         response = requests.get(download_url)
         response.raise_for_status()
         
-        content = ""
         file_extension = os.path.splitext(file_name)[1].lower()
+        content = []
         
         if file_extension == '.pdf':
-            # Extract text from PDF
+            # Extract text from PDF page by page
             pdf_reader = PyPDF2.PdfReader(BytesIO(response.content))
-            for page in pdf_reader.pages:
-                content += page.extract_text() + "\n"
+            for i, page in enumerate(pdf_reader.pages):
+                page_text = page.extract_text() or ""
+                content.append({"page_number": i + 1, "text": page_text})
         
         elif file_extension in ['.docx', '.doc']:
-            # Extract text from Word document
+            # Extract text from Word document (treat as single page)
             doc = Document(BytesIO(response.content))
+            full_text = ""
             for paragraph in doc.paragraphs:
-                content += paragraph.text + "\n"
+                full_text += paragraph.text + "\n"
+            content.append({"page_number": 1, "text": full_text})
         
         elif file_extension == '.txt':
-            # Plain text file
-            content = response.content.decode('utf-8', errors='ignore')
+            # Plain text file (treat as single page)
+            text = response.content.decode('utf-8', errors='ignore')
+            content.append({"page_number": 1, "text": text})
         
         else:
             logger.warning(f"Unsupported file type: {file_extension} for file: {file_name}")
-            content = f"[Unsupported file type: {file_extension}]"
+            content.append({"page_number": 1, "text": f"[Unsupported file type: {file_extension}]"})
         
-        return content.strip()
+        return content
     
     except Exception as e:
         logger.error(f"Error downloading/processing file {file_name}: {str(e)}")
-        return f"[Error processing file: {str(e)}]"
+        return [{"page_number": 1, "text": f"[Error processing file: {str(e)}]"}]
 
 def extract_batch_info(file_name: str) -> str:
     """
@@ -358,8 +388,77 @@ def extract_batch_info(file_name: str) -> str:
     else:
         return "General medical batch"
 
-def process_files_with_openai(files_data: List[Dict], use_mock: bool = False) -> Dict:
-    """Process file contents with OpenAI to create medical chronology"""
+def format_document_reference(file_name: str, page_number: int) -> str:
+    """
+    Format document reference for the Word document in the format: DOCUMENT_NAME-Page X
+    """
+    # Remove file extension
+    base_name = os.path.splitext(file_name)[0]
+    # Replace underscores and other separators with spaces for readability
+    formatted_name = base_name.replace('_', ' ').replace('-', ' ')
+    
+    # If page_number is 0, return just the document name (for ranges)
+    if page_number == 0:
+        return formatted_name
+    else:
+        return f"{formatted_name}-Page {page_number}"
+
+def num_tokens_from_string(string: str, model: str = "gpt-4o") -> int:
+    encoding = tiktoken.encoding_for_model(model)
+    return len(encoding.encode(string))
+
+def batch_files(files_data, max_tokens_per_batch=120000, model="gpt-4o"):
+    batches = []
+    current_batch = []
+    current_tokens = 0
+
+    for file_data in files_data:
+        file_content = file_data['content']
+        file_name = file_data['name']
+        page_number = file_data.get('page_number', 1)
+        batch_info = extract_batch_info(file_name)
+        file_str = f"\n\n--- FILE: {file_name} ({batch_info}) PAGE {page_number} ---\nContent:\n{file_content}"
+        file_tokens = num_tokens_from_string(file_str, model)
+
+        if current_tokens + file_tokens > max_tokens_per_batch and current_batch:
+            batches.append(current_batch)
+            current_batch = []
+            current_tokens = 0
+
+        current_batch.append(file_data)
+        current_tokens += file_tokens
+
+    if current_batch:
+        batches.append(current_batch)
+
+    return batches
+
+def process_batch(batch, batch_index):
+    files_content = ""
+    for i, file_data in enumerate(batch, 1):
+        file_name = file_data['name']
+        page_number = file_data.get('page_number', 1)
+        batch_info = extract_batch_info(file_name)
+        files_content += f"\n\n--- FILE {i}: {file_name} ({batch_info}) PAGE {page_number} ---\n"
+        files_content += f"File Path: {file_data.get('path', 'N/A')}\n"
+        files_content += f"Content:\n{file_data['content']}"
+
+    import openai
+    openai.api_key = OPENAI_API_KEY
+    response = openai.ChatCompletion.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": MASTER_PROMPT},
+            {"role": "user", "content": f"Please analyze these medical files and create a chronology summary. Use the actual file names provided for Bates number references:\n{files_content}"}
+        ],
+        max_tokens=4000,
+        temperature=0.1
+    )
+    response_content = response['choices'][0]['message']['content']
+    return response_content
+
+def process_files_with_gemini(files_data: list, use_mock: bool = False) -> dict:
+    """Process file contents with Google Gemini 1.5 Pro to create medical chronology"""
     try:
         if use_mock:
             # Mock response for testing
@@ -408,37 +507,67 @@ def process_files_with_openai(files_data: List[Dict], use_mock: bool = False) ->
                     {"facility": "University Iowa Hospital", "bates_range": "Adkisson_Patricia_UIH_178-185", "date_range": "10/31/2019", "description": "Comprehensive medical history documentation including past medical history, surgical history, family history, social history, and review of systems. Contains detailed physical examination findings, vital signs, laboratory results, and treatment plans. Includes documentation of chronic medical conditions and medication reconciliation."},
                     {"facility": "University Medical Center", "bates_range": "Adkisson_Patricia_UCM_111-366", "date_range": "04/01/2021 - 02/16/2022", "description": "Complete pathology reports including tissue biopsy results, immunohistochemical studies, flow cytometry analysis, and molecular studies. Contains detailed microscopic descriptions, differential diagnoses, and final pathological diagnoses. Includes oncology consultation notes, treatment planning documentation, and follow-up visit records with comprehensive physical examinations and laboratory results."},
                     {"facility": "Medical Center", "bates_range": "Adkisson_Patricia_MedCenter_146-111", "date_range": "01/17/2022 - 02/16/2022", "description": "Oncology follow-up visits and treatment planning documentation. Contains detailed physical examinations, vital signs, laboratory studies including CBC and comprehensive metabolic panel, imaging results interpretation, and treatment recommendations. Includes informed consent documentation and treatment scheduling information."}
+                ],
+                "qualifying_diagnosis_table": [
+                    {
+                        "diagnosis": "Bladder carcinoma - Morphologically low grade, mature B-Cell lymphoma, stage IV marginal zone",
+                        "dx_reference": "Adkisson_Patricia_2021.04.01_PathReport_UCM_321_p1",
+                        "treatment": "02/10/2022-06/02/2022 R-CVP x 6",
+                        "tx_reference": "Adkisson_Patricia_2022.02.16_TxOncoHx_UCM_111_p1"
+                    }
                 ]
             }
+
+        # Configure Gemini
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel("gemini-2.0-flash-exp")  # Latest Gemini 2.0 Flash with higher limits
         
-        # Use stable OpenAI 0.28 version
-        import openai
-        openai.api_key = OPENAI_API_KEY
-        
-        # Prepare the content for OpenAI
+        # Prepare all content in one go (no batching needed with 1M token context)
         files_content = ""
         for i, file_data in enumerate(files_data, 1):
             file_name = file_data['name']
-            # Extract batch numbers from file names with improved pattern matching
+            page_number = file_data.get('page_number', 1)
             batch_info = extract_batch_info(file_name)
-            
-            files_content += f"\n\n--- FILE {i}: {file_name} ({batch_info}) ---\n"
+            files_content += f"\n\n--- FILE {i}: {file_name} ({batch_info}) PAGE {page_number} ---\n"
             files_content += f"File Path: {file_data.get('path', 'N/A')}\n"
-            files_content += f"Content:\n{file_data['content'][:3000]}"  # Limit content to avoid token limits
+            files_content += f"Content:\n{file_data['content']}"
         
-        # Create OpenAI chat completion using gpt-4o-mini with legacy API
-        response = openai.ChatCompletion.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": MASTER_PROMPT},
-                {"role": "user", "content": f"Please analyze these medical files and create a chronology summary. Use the actual file names provided for Bates number references (e.g., if file is 'Adkisson_Patricia_2019.10.31_PMH_UIH_178.pdf', use 'Adkisson_Patricia_2019.10.31_PMH_UIH_178_p1' for page 1):\n{files_content}"}
-            ],
-            max_tokens=4000,
-            temperature=0.1
-        )
+        logger.info(f"Processing {len(files_data)} files with Gemini 2.0 Flash (1M token context)")
         
-        # Parse the response as JSON
-        response_content = response['choices'][0]['message']['content']
+        # Single API call with all content and retry logic
+        max_retries = 3
+        retry_delay = 60  # Start with 60 seconds
+        
+        for attempt in range(max_retries):
+            try:
+                response = model.generate_content(
+                    [
+                        {"role": "user", "parts": [MASTER_PROMPT]},
+                        {"role": "user", "parts": [f"Please analyze these medical files and create a chronology summary. Use the actual file names provided for Bates number references:\n{files_content}"]}
+                    ],
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.1,
+                        max_output_tokens=8192
+                    )
+                )
+                break  # Success, exit retry loop
+                
+            except Exception as e:
+                error_str = str(e)
+                if "429" in error_str and "quota" in error_str.lower():
+                    if attempt < max_retries - 1:
+                        logger.warning(f"Rate limit hit, waiting {retry_delay} seconds before retry {attempt + 1}/{max_retries}")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        logger.error("Max retries reached for rate limiting")
+                        raise
+                else:
+                    # Non-rate-limit error, don't retry
+                    raise
+        
+        # Parse the response
+        response_content = response.text
         
         # Try to extract JSON from the response
         try:
@@ -487,12 +616,97 @@ def process_files_with_openai(files_data: List[Dict], use_mock: bool = False) ->
                 },
                 "chronological_records": [],
                 "record_index": [],
+                "qualifying_diagnosis_table": [],
                 "raw_response": response_content
             }
     
     except Exception as e:
-        logger.error(f"Error processing with OpenAI: {str(e)}")
+        logger.error(f"Error processing with Gemini: {str(e)}")
         raise
+
+# Comment out the old OpenAI function for reference
+"""
+def process_files_with_openai_parallel_stitch(files_data: list, use_mock: bool = False) -> dict:
+    model = "gpt-4o"
+    max_tokens_per_batch = 15000  # Reduced to stay well under 30k TPM limit
+
+    batches = batch_files(files_data, max_tokens_per_batch, model)
+
+    # 1. Process batches sequentially with delays to avoid rate limiting
+    batch_outputs = []
+    for idx, batch in enumerate(batches):
+        logger.info(f"Processing batch {idx + 1}/{len(batches)}")
+        output = process_batch(batch, idx)
+        batch_outputs.append(output)
+        
+        # Add delay between batches to allow TPM to reset (1 minute = 60 seconds)
+        if idx < len(batches) - 1:  # Don't delay after the last batch
+            logger.info(f"Waiting 60 seconds before next batch to reset TPM...")
+            time.sleep(60)
+
+    # 2. Stitch together - limit prompt size to avoid TPM issues
+    # Prepare a prompt for the final call
+    summaries = []
+    for idx, output in enumerate(batch_outputs, 1):
+        summaries.append(f"--- PARTIAL SUMMARY {idx} ---\n{output}")
+
+    stitch_prompt = (
+        "You are an expert medical records analyst. Here are several partial medical chronology summaries, each in the required JSON format. "
+        "Please merge them into a single, unified chronology in the same JSON format, ensuring all information is included, deduplicated, and in correct chronological order.\n\n"
+        + "\n\n".join(summaries)
+    )
+
+    # Check if stitching prompt is too large and truncate if needed
+    stitch_tokens = num_tokens_from_string(stitch_prompt, model)
+    max_stitch_tokens = 20000  # Leave room for 4k output tokens
+    
+    if stitch_tokens > max_stitch_tokens:
+        logger.warning(f"Stitching prompt too large ({stitch_tokens} tokens), truncating to {max_stitch_tokens}")
+        # Truncate by taking first part of each summary
+        truncated_summaries = []
+        for summary in summaries:
+            # Take roughly equal portion of each summary
+            target_length = max_stitch_tokens // len(summaries)
+            truncated_summary = summary[:target_length] + "..." if len(summary) > target_length else summary
+            truncated_summaries.append(truncated_summary)
+        
+        stitch_prompt = (
+            "You are an expert medical records analyst. Here are several partial medical chronology summaries (truncated due to size limits), each in the required JSON format. "
+            "Please merge them into a single, unified chronology in the same JSON format, ensuring all information is included, deduplicated, and in correct chronological order.\n\n"
+            + "\n\n".join(truncated_summaries)
+        )
+
+    # Add delay before final stitching call to ensure TPM is reset
+    logger.info("Waiting 60 seconds before final stitching call to reset TPM...")
+    time.sleep(60)
+
+    import openai
+    openai.api_key = OPENAI_API_KEY
+    final_response = openai.ChatCompletion.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": MASTER_PROMPT},
+            {"role": "user", "content": stitch_prompt}
+        ],
+        max_tokens=4000,
+        temperature=0.1
+    )
+    final_content = final_response['choices'][0]['message']['content']
+
+    # Try to extract JSON
+    try:
+        if "```json" in final_content:
+            json_start = final_content.find("```json") + 7
+            json_end = final_content.find("```", json_start)
+            json_content = final_content[json_start:json_end].strip()
+        else:
+            json_content = final_content
+
+        chronology_data = json.loads(json_content)
+        return chronology_data
+    except json.JSONDecodeError:
+        return {"raw_response": final_content}
+"""
 
 def create_chronology_document(chronology_data: Dict, patient_name: str = "Unknown") -> bytes:
     """Create Word document using the template and chronology data"""
@@ -504,7 +718,7 @@ def create_chronology_document(chronology_data: Dict, patient_name: str = "Unkno
         # Fill in the document based on the chronology data
         meta_table = chronology_data.get("meta_table", {})
         
-        # Fill in Table 0 (Meta Table)
+        # Table 0: Meta Table
         if len(doc.tables) > 0:
             meta_table_obj = doc.tables[0]
             # Fill in meta information
@@ -537,7 +751,7 @@ def create_chronology_document(chronology_data: Dict, patient_name: str = "Unkno
                 return separator.join(str_items) if str_items else "None"
             return str(items)
         
-        # Fill in Table 1 (Medical History Details)
+        # Table 1: Summary of Medical History
         if len(doc.tables) > 1:
             details_table = doc.tables[1]
             medical_history = chronology_data.get("medical_history_summary", {})
@@ -567,9 +781,54 @@ def create_chronology_document(chronology_data: Dict, patient_name: str = "Unkno
                         row.cells[0].text = str(description)
                         row.cells[1].text = str(details)
         
-        # Fill in Table 2 (Chronological Records)
+        # Table 2: Qualifying Diagnosis Table
         if len(doc.tables) > 2:
-            records_table = doc.tables[2]
+            qd_table = doc.tables[2]
+            qualifying_diagnosis = chronology_data.get("qualifying_diagnosis_table", [])
+
+            # Clear existing rows except header
+            while len(qd_table.rows) > 1:
+                qd_table._element.remove(qd_table.rows[1]._element)
+
+            for entry in qualifying_diagnosis:
+                new_row = qd_table.add_row()
+                new_row.cells[0].text = str(entry.get("diagnosis", ""))
+                
+                # Format dx_reference
+                dx_ref = entry.get("dx_reference", "")
+                if dx_ref and "_p" in dx_ref:
+                    parts = dx_ref.split("_p")
+                    if len(parts) == 2:
+                        file_part = parts[0]
+                        page_num = parts[1]
+                        formatted_dx_ref = format_document_reference(file_part, int(page_num))
+                        new_row.cells[1].text = formatted_dx_ref
+                    else:
+                        new_row.cells[1].text = dx_ref
+                else:
+                    new_row.cells[1].text = dx_ref
+                
+                new_row.cells[2].text = str(entry.get("treatment", ""))
+                
+                # Format tx_reference
+                tx_ref = entry.get("tx_reference", "")
+                if tx_ref and "_p" in tx_ref:
+                    parts = tx_ref.split("_p")
+                    if len(parts) == 2:
+                        file_part = parts[0]
+                        page_num = parts[1]
+                        formatted_tx_ref = format_document_reference(file_part, int(page_num))
+                        new_row.cells[3].text = formatted_tx_ref
+                    else:
+                        new_row.cells[3].text = tx_ref
+                else:
+                    new_row.cells[3].text = tx_ref
+        else:
+            logger.warning("Qualifying Diagnosis table (Table 2) not found in document")
+        
+        # Table 3: Chronological Records
+        if len(doc.tables) > 3:
+            records_table = doc.tables[3]
             chronological_records = chronology_data.get("chronological_records", [])
             
             # Clear existing rows except header
@@ -585,11 +844,30 @@ def create_chronology_document(chronology_data: Dict, patient_name: str = "Unkno
                         new_row.cells[0].text = str(record.get("date", ""))
                         new_row.cells[1].text = str(record.get("provider_facility", ""))
                         new_row.cells[2].text = str(record.get("summary", ""))
-                        new_row.cells[3].text = str(record.get("bates", ""))
+                        
+                        # Format the Bates reference for the document
+                        bates_reference = record.get("bates", "")
+                        if bates_reference:
+                            # Try to extract file name and page number from the Bates reference
+                            # Format: "FileName_BatchInfo_pX" -> "FileName-Page X"
+                            if "_p" in bates_reference:
+                                parts = bates_reference.split("_p")
+                                if len(parts) == 2:
+                                    file_part = parts[0]
+                                    page_num = parts[1]
+                                    # Format as DOCUMENT_NAME-Page X
+                                    formatted_ref = format_document_reference(file_part, int(page_num))
+                                    new_row.cells[3].text = formatted_ref
+                                else:
+                                    new_row.cells[3].text = bates_reference
+                            else:
+                                new_row.cells[3].text = bates_reference
+                        else:
+                            new_row.cells[3].text = ""
         
-        # Fill in Table 3 (Record Index)
-        if len(doc.tables) > 3:
-            index_table = doc.tables[3]
+        # Table 4: Record Index
+        if len(doc.tables) > 4:
+            index_table = doc.tables[4]
             record_index = chronology_data.get("record_index", [])
             
             # Clear existing rows except header
@@ -606,14 +884,25 @@ def create_chronology_document(chronology_data: Dict, patient_name: str = "Unkno
                     
                     if num_cols >= 3:
                         new_row.cells[0].text = str(index_record.get("facility", ""))
-                        new_row.cells[1].text = str(index_record.get("bates_range", ""))
+                        
+                        # Format bates_range for the document
+                        bates_range = index_record.get("bates_range", "")
+                        if bates_range and "_p" in bates_range:
+                            # For ranges, extract the base file name before the page number
+                            base_part = bates_range.split("_p")[0]
+                            # Format as DOCUMENT_NAME (without page number for ranges)
+                            formatted_range = format_document_reference(base_part, 0)
+                            new_row.cells[1].text = formatted_range
+                        else:
+                            new_row.cells[1].text = bates_range
+                        
                         new_row.cells[2].text = str(index_record.get("date_range", ""))
                         
                         # If there's a 4th column, add description
                         if num_cols >= 4:
                             new_row.cells[3].text = str(index_record.get("description", ""))
         else:
-            logger.warning("Record Index table (Table 3) not found in document")
+            logger.warning("Record Index table (Table 4) not found in document")
         
         # Save to bytes
         doc_buffer = BytesIO()
@@ -695,21 +984,26 @@ def lambda_handler(event, context):
         files_data = []
         for file_info in all_files[:10]:  # Limit to first 10 files to avoid token limits
             logger.info(f"Processing file: {file_info['name']}")
-            content = download_file_content(file_info['download_url'], file_info['name'])
-            files_data.append({
-                'name': file_info['name'],
-                'path': file_info['path'],
-                'content': content
-            })
+            page_contents = download_file_content(file_info['download_url'], file_info['name'])
+            for page in page_contents:
+                files_data.append({
+                    'name': file_info['name'],
+                    'path': file_info['path'],
+                    'content': page['text'],
+                    'page_number': page['page_number']
+                })
         
-        # Process files with OpenAI
-        logger.info("Creating chronology with OpenAI...")  
+        # Process files with Gemini (replacing OpenAI)
+        logger.info("Creating chronology with Gemini...")  
         use_mock = body.get('use_mock_ai', False)
-        chronology_data = process_files_with_openai(files_data, use_mock)
+        chronology_data = process_files_with_gemini(files_data, use_mock)
         
         # Create Word document
         logger.info("Creating Word document...")
         doc_content = create_chronology_document(chronology_data, patient_name)
+        # with open("chronology.docx", "wb") as f:
+        #     f.write(doc_content)
+        
         
         # Upload to S3
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
